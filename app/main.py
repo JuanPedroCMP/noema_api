@@ -2,7 +2,7 @@ from fastapi import FastAPI
 
 from .api.api import api_router
 
-app = FastAPI(title="DomusAPI", version="1.0")
+app = FastAPI(title="Noemapip install pwdlib[argon2]API", version="1.0")
 
 @app.get("/")
 def root():

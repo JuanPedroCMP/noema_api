@@ -11,30 +11,32 @@ from datetime import datetime
 
 
 def cr_user(user_data: UserCreate, db: Session):   
-    try:
-        user = User(
-        id=uuid.uuid4(),
-        user_name=user_data.user_name,
-        primary_email=user_data.primary_email,
-        user_display_name=user_data.user_display_name,
-        password_hash=hash_password(user_data.password),
-        created_at=datetime.now()
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(instance=user)
-        print(user)
-    except ValueError as e:
-        raise HTTPException(400, detail=str(e))
+    user = User(
+    id=uuid.uuid4(),
+    user_name=user_data.user_name,
+    primary_email=user_data.primary_email,
+    user_display_name=user_data.user_display_name,
+    password_hash=hash_password(user_data.password),
+    created_at=datetime.now()
+    )
+        
+    db.add(user)
+    db.commit()
+    db.refresh(instance=user)
+        
     return user
 
-def up_user(user_data: UserUpdate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)): 
+def up_user(user_data: UserUpdate, token: str, db: Session): 
   user = get_current_user(token=token, db=db)
   udp_data = dict()
   
   for k, v in user_data.model_dump(exclude_unset=True).items():  
-        setattr(user, k, v)
-        udp_data += {k,v}
+        if k == "password":
+            user.password_hash = hash_password(v)
+            udp_data[k] = "**********"
+        else:
+            udp_data[k] = v
+            setattr(user, k, v)
   user.updated_at = datetime.now()
   db.commit()
   db.refresh(user)
