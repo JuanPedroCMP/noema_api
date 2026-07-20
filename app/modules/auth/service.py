@@ -2,9 +2,12 @@ from ...core.security import create_access_token, verify_password
 from ...core.database import get_db
 from sqlalchemy.orm import Session
 from ...core.db_models.app_auth_models import User
+from authlib.integrations.starlette_client import OAuth
 from .models import LoginData
 from sqlalchemy import select, or_
 from fastapi import HTTPException, status
+
+
 
 def login(login_data: LoginData, db: Session) -> dict:
   credentials_exception = HTTPException(

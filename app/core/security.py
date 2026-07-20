@@ -10,9 +10,32 @@ from sqlalchemy import select
 from uuid import UUID
 from .db_models.app_auth_models import User
 import os
+import base64
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 load_dotenv(dotenv_path='app/config/.env.security')
 
+
+### Crypt api key
+def load_key(env_var: str = "secret_key_api_key_ai") -> bytes:
+    key_b64 = os.environ[env_var]
+    return base64.b64decode(key_b64)
+
+
+def encrypt_api_key(api_key: str) -> str:
+    aesgcm = AESGCM(load_key())
+    nonce = os.urandom(12)  # nonce de 12 bytes, único por criptografia
+    ciphertext = aesgcm.encrypt(nonce, api_key.encode(), associated_data=None)
+    # concatena nonce + ciphertext pra guardar tudo junto no banco
+    return base64.b64encode(nonce + ciphertext).decode()
+
+
+def decrypt_api_key(encrypted_b64: str) -> str:
+    raw = base64.b64decode(encrypted_b64)
+    nonce, ciphertext = raw[:12], raw[12:]
+    aesgcm = AESGCM(load_key())
+    plaintext = aesgcm.decrypt(nonce, ciphertext, associated_data=None)
+    return plaintext.decode()
 
 ### Hash
 pwd = PasswordHash.recommended()

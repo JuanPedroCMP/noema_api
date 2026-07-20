@@ -10,7 +10,7 @@ from .models import UserCreate, UserUpdate
 from datetime import datetime
 
 
-def cr_user(user_data: UserCreate, db: Session):   
+def cr_user(user_data: UserCreate, db: Session) -> User:   
     user = User(
     id=uuid.uuid4(),
     user_name=user_data.user_name,
@@ -30,7 +30,7 @@ def up_user(user_data: UserUpdate, token: str, db: Session):
   user = get_current_user(token=token, db=db)
   udp_data = dict()
   
-  for k, v in user_data.model_dump(exclude_unset=True).items():  
+  for k, v in user_data.model_dump(exclude_unset=True, exclude_none=True, exclude_defaults=True).items():  
         if k == "password":
             user.password_hash = hash_password(v)
             udp_data[k] = "**********"

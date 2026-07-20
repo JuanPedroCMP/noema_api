@@ -1,5 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.responses import RedirectResponse, JSONResponse
+from starlette.middleware.sessions import SessionMiddleware
+from authlib.integrations.starlette_client import OAuth
 from .models import LoginData
 from sqlalchemy.orm import Session
 from .service import login
@@ -9,6 +12,7 @@ router = APIRouter(
     prefix="/auth",
     tags=["Authentication"]
 )
+
 
 @router.post("/login")
 def authenticate(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
