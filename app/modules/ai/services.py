@@ -408,12 +408,9 @@ def get_ai_usage_log(identificator: str, db: Session, token: str) -> AiUsageLog:
     user = get_current_user(token, db)
 
     ai_usage_log = db.scalar(select(AiUsageLog)
-        .join(
-            UserApiKey, UserApiKey.id == AiUsageLog.id_user_api_key
-        )
         .where(
             AiUsageLog.id == UUID(identificator),
-            UserApiKey.id_user == user.id
+            AiUsageLog.id_user == user.id
     ))
         
     if ai_usage_log is None:

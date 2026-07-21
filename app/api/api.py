@@ -1,11 +1,20 @@
 from fastapi import APIRouter
 
 from app.modules.auth.router import router as auth_router
-from app.modules.users.router import router as user_router
+from app.modules.user.router import router as user_router
 from app.modules.ai.router import router as ai_router
+from app.modules.theme.router import router as user_theme_router
+from app.modules.device.router import router as device_router
+from app.modules.user_config.router import router as user_config_router
 
 api_router= APIRouter(prefix="/api/v1")
 
 api_router.include_router(auth_router)
 api_router.include_router(user_router)
 api_router.include_router(ai_router)
+api_router.include_router(user_theme_router)
+api_router.include_router(device_router)
+api_router.include_router(user_config_router)
+
+
+

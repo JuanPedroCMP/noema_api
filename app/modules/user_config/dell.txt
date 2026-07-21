@@ -1,0 +1,31 @@
+################
+### Response Language Preference Order
+################
+response_response_language_preference_order_router = APIRouter(
+    prefix="/response_response_language_preference_order",
+    tags=["response_response_language_preference_order"]
+)
+
+@response_response_language_preference_order_router.get("/get/{identificator}", response_model=ResponseLanguagePreferenceOrder)
+def get_response_language_preference_order(identificator: str, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    return gl(token, identificator, db)
+
+@response_response_language_preference_order_router.get("/list", response_model=list[ResponseLanguagePreferenceOrder])
+def list_response_language_preference_orders(filters: Annotated[LanguageFilters, Query()], db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):  
+    _filters = filters.model_dump(exclude_unset=True, exclude_none=True, exclude_defaults=True)
+    return ll(token, _filters, db)
+
+@response_response_language_preference_order_router.post("/create", response_model=ResponseLanguagePreferenceOrder)
+def create_response_language_preference_order(new_user_response_language_preference_order: LanguageCreate, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    user_response_language_preference_order = cl(token, new_user_response_language_preference_order, db)
+    return user_response_language_preference_order
+
+@response_response_language_preference_order_router.put("/update/{identificator}", response_model=ResponseLanguagePreferenceOrder)
+def update_response_language_preference_order(identificator: str, user_response_language_preference_order_data: LanguageUpdate, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    upd_data = ul(token, identificator, user_response_language_preference_order_data, db)
+    return upd_data
+
+@response_response_language_preference_order_router.delete("/delete/{identificator}", response_model=ResponseLanguagePreferenceOrder)
+def update_response_language_preference_order(identificator: str, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)) -> bool:
+    sucess = drlpo(token, identificator, db)
+    return sucess
