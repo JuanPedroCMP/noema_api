@@ -1,5 +1,5 @@
 from ...core.db_models.theme_models import UserColorTheme, UserTypographyTheme
-from ...core.security import get_current_user, encrypt_api_key, decrypt_api_key
+from ...core.security import get_current_user, encrypt, decrypt
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_, and_
 from fastapi import HTTPException, status

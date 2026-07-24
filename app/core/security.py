@@ -22,15 +22,15 @@ def load_key(env_var: str = "secret_key_api_key_ai") -> bytes:
     return base64.b64decode(key_b64)
 
 
-def encrypt_api_key(api_key: str) -> str:
+def encrypt(secret: str) -> str:
     aesgcm = AESGCM(load_key())
     nonce = os.urandom(12)  # nonce de 12 bytes, único por criptografia
-    ciphertext = aesgcm.encrypt(nonce, api_key.encode(), associated_data=None)
+    ciphertext = aesgcm.encrypt(nonce, secret.encode(), associated_data=None)
     # concatena nonce + ciphertext pra guardar tudo junto no banco
     return base64.b64encode(nonce + ciphertext).decode()
 
 
-def decrypt_api_key(encrypted_b64: str) -> str:
+def decrypt(encrypted_b64: str) -> str:
     raw = base64.b64decode(encrypted_b64)
     nonce, ciphertext = raw[:12], raw[12:]
     aesgcm = AESGCM(load_key())

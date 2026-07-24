@@ -1,5 +1,5 @@
 from ...core.db_models.ai_models import AiProvider, AiModel, UserApiKey, Agent, TaskType, AgentModel, UserApiKeyCanUseIaModel, AiUsageLog
-from ...core.security import get_current_user, encrypt_api_key, decrypt_api_key
+from ...core.security import get_current_user, encrypt, decrypt
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_, and_
 from fastapi import HTTPException, status
@@ -179,7 +179,7 @@ def create_user_api_key(token: str, create_data: UserApiKeyCreate, db: Session) 
         id_ai_provider=create_data.id_ai_provider,
         id_user=user.id,
         name=create_data.name,
-        encrypted_key=encrypt_api_key(create_data.api_key),
+        encrypted_key=encrypt(create_data.api_key),
         is_active=create_data.is_active,
         created_at=datetime.now()
     )
