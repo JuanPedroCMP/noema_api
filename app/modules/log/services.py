@@ -1,21 +1,19 @@
 from ...core.db_models.log_models import GenericLog
-from ...core.security import get_current_user, encrypt, decrypt
+from ...core.security import get_current_user
 from sqlalchemy.orm import Session
-from sqlalchemy import select, or_, and_
+from sqlalchemy import select, and_
 from fastapi import HTTPException, status
 from uuid import UUID, uuid4
-from ..auth.service import get_google_account
-from .models import BackupFileCreate, GenericLogCreate
+from .models import GenericLogCreate, GenericLogCreate
 from datetime import datetime
 
 ################   
 ### Generic Log
 ################
-def get_Genericlog(token: str, identificator : str, db: Session):
-    Genericlog = GenericLog()
+def get_generic_log(token: str, identificator : str, db: Session):
     user = get_current_user(token, db)    
 
-    Genericlog = db.scalar(select(GenericLog).where(
+    generic_log = db.scalar(select(GenericLog).where(
         and_(
             GenericLog.id == UUID(identificator),
             GenericLog.id_user == user.id
@@ -23,44 +21,44 @@ def get_Genericlog(token: str, identificator : str, db: Session):
      ))
 
         
-    if Genericlog is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Genericlog não encontrado")
+    if generic_log is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="generic_log não encontrado")
             
-    return Genericlog
+    return generic_log
 
-def list_Genericlogs(token: str, db: Session, filters: dict | None) -> list[GenericLog]:
+def list_generic_logs(token: str, db: Session, filters: dict | None) -> list[GenericLog]:
     user = get_current_user(token, db)
     stmt = select(GenericLog).where(
-            GenericLog.id == user.id
+            GenericLog.id_user == user.id
         )
  
     for k, v in filters.items():
         collum_attr = getattr(GenericLog, k)
         stmt = stmt.where(collum_attr == v)
     
-    Genericlogs = db.scalars(stmt).all()
+    generic_logs = db.scalars(stmt).all()
     
-    if Genericlogs is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Genericlog não encontrado")
+    if generic_logs is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="generic_log não encontrado")
         
-    return Genericlogs
+    return generic_logs
 
-def create_Genericlog(token: str, Genericlog_data: GenericLogCreate, db: Session) -> GenericLog:
-    new_Genericlog = GenericLog(
+def create_generic_log(token: str, generic_log_data: GenericLogCreate, db: Session) -> GenericLog:
+    new_generic_log = GenericLog(
         id=uuid4(),
-        type=Genericlog_data.type,
-        id_user=Genericlog_data.id_user,
-        details=Genericlog_data.details,
+        type=generic_log_data.type,
+        id_user=generic_log_data.id_user,
+        details=generic_log_data.details,
         created_at=datetime.now()
     )
-    new_Genericlog.created_at = datetime.now()      
-    db.add(new_Genericlog)
+    new_generic_log.created_at = datetime.now()      
+    db.add(new_generic_log)
     db.commit()
-    db.refresh(new_Genericlog)
-    return new_Genericlog
+    db.refresh(new_generic_log)
+    return new_generic_log
 
-def delete_Genericlog(token: str, identificator : str, db: Session) -> bool:
-    Genericlog = get_Genericlog(token, identificator, db)
-    db.delete(Genericlog)
+def delete_generic_log(token: str, identificator : str, db: Session) -> bool:
+    generic_log = get_generic_log(token, identificator, db)
+    db.delete(generic_log)
     db.commit()
     return True
