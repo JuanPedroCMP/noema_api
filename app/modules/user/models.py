@@ -3,7 +3,7 @@ from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, EmailStr, ConfigDict
 
-class UserOut:
+class UserOut(BaseModel):
     id: UUID
     user_name: str
     primary_email:EmailStr
