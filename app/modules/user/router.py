@@ -6,7 +6,7 @@ from sqlalchemy import select
 import uuid
 from ...core.db_models.app_auth_models import User
 from ...core.security import get_current_user, oauth2_scheme, hash_password
-from .models import UserCreate, UserUpdate
+from .models import UserCreate, UserOut, UserUpdate
 from datetime import datetime
 
 router = APIRouter(
@@ -14,12 +14,12 @@ router = APIRouter(
     tags=["User"]
 )
 
-@router.get("/get")
+@router.get("/get", response_model=UserOut)
 def current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     user = get_current_user(token, db)
     return user
 
-@router.post("/create")
+@router.post("/create", response_model=UserOut)
 def new_user(user_data: UserCreate, db: Session = Depends(get_db)):   
     try:
         user = cr_user(user_data=user_data, db=db)
@@ -27,10 +27,9 @@ def new_user(user_data: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(400, detail=str(e))
     except Exception as e:
         raise HTTPException(400, detail=str(e))
-    return {"success": "Usuario criado com sucesso!",
-            "user": user}
+    return user
 
-@router.put("/update")
+@router.put("/update", response_model=UserOut)
 def update_user(user_data: UserUpdate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)): 
     try:
      upd_user = up_user(user_data, token, db)
@@ -39,8 +38,7 @@ def update_user(user_data: UserUpdate, token: str = Depends(oauth2_scheme), db: 
     except Exception as e:
      raise HTTPException(400, detail=str(e))
 
-    return {"message": "Sucesso!",
-          "upd data": upd_user }
+    return upd_user
 
 @router.delete("/delete")
 def delete_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):

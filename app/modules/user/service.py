@@ -40,7 +40,7 @@ def up_user(user_data: UserUpdate, token: str, db: Session):
   user.updated_at = datetime.now()
   db.commit()
   db.refresh(user)
-  return udp_data
+  return user
 
 
 
