@@ -19,6 +19,6 @@ class GraphNode(BaseModel):
     node_description:str
 class GraphEdge(BaseModel):
     source_node: int
-    target_node: str
+    target_node: int
     edge_type:str
 

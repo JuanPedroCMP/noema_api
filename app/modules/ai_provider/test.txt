@@ -1,0 +1,157 @@
+{
+graph_title='Mapa de Conteúdos da Matemática do Ensino Médio', 
+graph_description='Estrutura hierárquica e de pré-requisitos dos principais tópicos de matemática estudados no ensino médio, organizada em nós (conceitos) e relações (subtópico e pré-requisito).', 
+nodes=[
+GraphNode(
+    node_id=1, 
+    node_title='Matemática do Ensino Médio', 
+    node_description='Conjunto de disciplinas de matemática abordadas no ensino médio, incluindo álgebra, geometria, trigonometria, análise, probabilidade e estatística, e matemática financeira.'), 
+GraphNode(
+    node_id=2, 
+    node_title='Álgebra', 
+    node_description='Estudo de expressões algébricas, equações, inequações, polinômios, progressões e sistemas lineares.'), 
+GraphNode(
+    node_id=3, 
+    node_title='Geometria', 
+    node_description='Estudo das propriedades e relações de figuras planas e espaciais, além de transformações geométricas.'), 
+GraphNode(
+    node_id=4, 
+    node_title='Trigonometria', 
+    node_description='Estudo das funções trigonométricas, identidades, e resolução de equações trigonométricas.'), 
+GraphNode(
+    node_id=5, 
+    node_title='Análise', 
+    node_description='Estudo de funções, limites, derivadas e integrais.'), 
+GraphNode(
+    node_id=6, 
+    node_title='Probabilidade e Estatística', 
+    node_description='Conceitos de probabilidade, distribuições, estatística descritiva e inferencial.'), 
+GraphNode(
+    node_id=7, 
+    node_title='Matemática Financeira', 
+    node_description='Aplicação de conceitos algébricos a juros simples, juros compostos, descontos e anuidades.'), 
+GraphNode(
+    node_id=8, 
+    node_title='Equações e Inequações', 
+    node_description='Resolução de equações e inequações de primeiro e segundo grau.'), 
+GraphNode(
+    node_id=9, 
+    node_title='Polinômios', 
+    node_description='Operações com polinômios, fatoração e raízes.'), 
+GraphNode(
+    node_id=10, 
+    node_title='Progressões', 
+    node_description='Sequências aritméticas e geométricas, fórmulas de termo geral e soma.'), 
+GraphNode(
+    node_id=11, 
+    node_title='Sistemas Lineares', 
+    node_description='Resolução de sistemas de equações lineares por substituição, eliminação e método matricial.'), 
+GraphNode(
+    node_id=12, 
+    node_title='Geometria Plana', 
+    node_description='Estudo de triângulos, quadriláteros, círculos e áreas.'), 
+GraphNode(
+    node_id=13, 
+    node_title='Geometria Espacial', 
+    node_description='Estudo de prismas, pirâmides, cilindros, cones e esferas.'), 
+GraphNode(
+    node_id=14, 
+    node_title='Transformações Geométricas', 
+    node_description='Translações, rotações, reflexões e homotetias.'), 
+GraphNode(
+    node_id=15, 
+    node_title='Funções Trigonométricas', 
+    node_description='Seno, cosseno, tangente e suas propriedades.'), 
+GraphNode(
+    node_id=16, 
+    node_title='Identidades Trigonométricas', 
+    node_description='Relações fundamentais entre funções trigonométricas.'), 
+GraphNode(
+    node_id=17, 
+    node_title='Equações Trigonométricas', 
+    node_description='Resolução de equações envolvendo funções trigonométricas.'), 
+GraphNode(
+    node_id=18, 
+    node_title='Funções (Linear, Quadrática, Exponencial, Logarítmica)', 
+    node_description='Estudo das principais famílias de funções e seus gráficos.'), 
+GraphNode(
+    node_id=19, 
+    node_title='Limites', 
+    node_description='Cálculo de limites de funções, incluindo limites laterais e infinitos.'), 
+GraphNode(
+    node_id=20, 
+    node_title='Derivadas', 
+    node_description='Conceito de taxa de variação, regras de derivação e aplicações.'), 
+GraphNode(
+    node_id=21, 
+    node_title='Integrais', 
+    node_description='Antiderivadas, cálculo de áreas e aplicações de integrais definidas.'), 
+GraphNode(
+    node_id=22, 
+    node_title='Probabilidade', 
+    node_description='Cálculo de probabilidades, eventos, espaço amostral e regras de contagem.'), 
+GraphNode(
+    node_id=23, 
+    node_title='Distribuições', 
+    node_description='Distribuições discretas e contínuas, como binomial e normal.'), 
+GraphNode(
+    node_id=24, 
+    node_title='Estatística Descritiva', 
+    node_description='Medidas de tendência central, dispersão e representação gráfica de dados.'), 
+GraphNode(
+    node_id=25, 
+    node_title='Inferência Estatística', 
+    node_description='Estimação, testes de hipóteses e intervalos de confiança.'), 
+GraphNode(
+    node_id=26, 
+    node_title='Juros Simples', 
+    node_description='Cálculo de juros simples e aplicações em problemas financeiros.'), 
+GraphNode(
+    node_id=27, 
+    node_title='Juros Compostos', 
+    node_description='Cálculo de juros compostos, capitalização e aplicações.'), 
+GraphNode(
+    node_id=28, 
+    node_title='Descontos', 
+    node_description='Cálculo de descontos simples e compostos.'), 
+GraphNode(
+    node_id=29, 
+    node_title='Anuidades', 
+    node_description='Cálculo de pagamentos periódicos, valor presente e futuro de anuidades.')],
+ 
+edges=[
+GraphEdge(source_node=2, target_node=1, edge_type='subtopic_of'), 
+GraphEdge(source_node=3, target_node=1, edge_type='subtopic_of'), 
+GraphEdge(source_node=4, target_node=1, edge_type='subtopic_of'), 
+GraphEdge(source_node=5, target_node=1, edge_type='subtopic_of'), 
+GraphEdge(source_node=6, target_node=1, edge_type='subtopic_of'), 
+GraphEdge(source_node=7, target_node=1, edge_type='subtopic_of'), 
+GraphEdge(source_node=8, target_node=2, edge_type='subtopic_of'), 
+GraphEdge(source_node=9, target_node=2, edge_type='subtopic_of'), 
+GraphEdge(source_node=10, target_node=2, edge_type='subtopic_of'), 
+GraphEdge(source_node=11, target_node=2, edge_type='subtopic_of'), 
+GraphEdge(source_node=12, target_node=3, edge_type='subtopic_of'), 
+GraphEdge(source_node=13, target_node=3, edge_type='subtopic_of'), 
+GraphEdge(source_node=14, target_node=3, edge_type='subtopic_of'), 
+GraphEdge(source_node=15, target_node=4, edge_type='subtopic_of'), 
+GraphEdge(source_node=16, target_node=4, edge_type='subtopic_of'), 
+GraphEdge(source_node=17, target_node=4, edge_type='subtopic_of'), 
+GraphEdge(source_node=18, target_node=5, edge_type='subtopic_of'), 
+GraphEdge(source_node=19, target_node=5, edge_type='subtopic_of'), 
+GraphEdge(source_node=20, target_node=5, edge_type='subtopic_of'), 
+GraphEdge(source_node=21, target_node=5, edge_type='subtopic_of'), 
+GraphEdge(source_node=22, target_node=6, edge_type='subtopic_of'), 
+GraphEdge(source_node=23, target_node=6, edge_type='subtopic_of'), 
+GraphEdge(source_node=24, target_node=6, edge_type='subtopic_of'), 
+GraphEdge(source_node=25, target_node=6, edge_type='subtopic_of'), 
+GraphEdge(source_node=26, target_node=7, edge_type='subtopic_of'), 
+GraphEdge(source_node=27, target_node=7, edge_type='subtopic_of'), 
+GraphEdge(source_node=28, target_node=7, edge_type='subtopic_of'), 
+GraphEdge(source_node=29, target_node=7, edge_type='subtopic_of'), 
+GraphEdge(source_node=2, target_node=4, edge_type='prerequisite_of'), 
+GraphEdge(source_node=2, target_node=5, edge_type='prerequisite_of'), 
+GraphEdge(source_node=2, target_node=7, edge_type='prerequisite_of'), 
+GraphEdge(source_node=18, target_node=19, edge_type='prerequisite_of'), 
+GraphEdge(source_node=19, target_node=20, edge_type='prerequisite_of'), 
+GraphEdge(source_node=20, target_node=21, edge_type='prerequisite_of'), 
+GraphEdge(source_node=22, target_node=25, edge_type='prerequisite_of')]}
