@@ -285,13 +285,14 @@ def get_agent_model(identificator: str, db: Session) -> AgentModel:
 
 def list_agent_models(filters: AgentModelFilters | None, db: Session) -> list[AgentModel]:
     stmt = select(AgentModel)
-    
-    for k, v in filters.items():
+
+    filters_data = filters.model_dump(exclude_none=True) if filters else {}
+
+    for k, v in filters_data.items():
         attr = getattr(AgentModel, k)
         stmt = stmt.where(attr == v)
-        
+
     agent_models = db.scalars(stmt).all()
-    
     return agent_models
 
 def create_agent_model(create_data: AgentModelCreate, db: Session) -> AgentModel:
@@ -442,7 +443,7 @@ def create_ai_usage_log(create_data: AiUsageLogCreate, db: Session, token: str) 
         id=uuid4(),
         id_agent_model=create_data.id_agent_model,
         id_user=create_data.id_user,
-        usage_details=create_data.usage_datails,
+        usage_details=create_data.usage_details,
         created_at=datetime.now()
     )    
     

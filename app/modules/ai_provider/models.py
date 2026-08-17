@@ -1,5 +1,16 @@
 from pydantic import BaseModel, Json
 from uuid import UUID
+from enum import Enum
+
+class GraphType(Enum):
+    AREA = "AREA"
+    TOPIC = "TOPIC"
+    CONCEPT = "CONCEPT"
+    SUBCONCEPT = "SUBCONCEPT"
+    
+class EdgeType(Enum):
+    SUBTOPIC = "SUBTOPIC"
+    PREREQUISITE = "PREREQUISITE"
 
 class AiResponseOut(BaseModel):
     id_agent: UUID
@@ -15,10 +26,11 @@ class AiGraphResponse(BaseModel):
     
 class GraphNode(BaseModel):
     node_id: int
-    node_title: str
-    node_description:str
+    title: str
+    description:str
+    type: GraphType
 class GraphEdge(BaseModel):
     source_node: int
     target_node: int
-    edge_type:str
+    type: EdgeType
 

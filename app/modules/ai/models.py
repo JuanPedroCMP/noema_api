@@ -230,19 +230,19 @@ class AiUsageLogOut(BaseModel):
     id: UUID
     id_user: UUID
     id_agent_model: UUID
-    usage_datails: Json
+    usage_details: dict
     created_at: datetime | None
 
 class AiUsageLogCreate(BaseModel):
     id_user: UUID
     id_agent_model: UUID
-    usage_datails: Json
+    usage_details: dict
 
     
 class AiUsageLogFilters(BaseModel):
     id: Optional[UUID | None] = None
     id_user: Optional[UUID | None] = None
     id_agent_model: Optional[UUID | None] = None
-    usage_datails: Optional[Json | None] = None
+    usage_details: Optional[dict | None] = None
     created_at: Optional[datetime | None] = None
 
