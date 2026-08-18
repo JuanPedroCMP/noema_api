@@ -20,14 +20,14 @@ class AiResponseOut(BaseModel):
     
 class AiGraphResponse(BaseModel):
     graph_title: str
-    graph_description:str
+  #  graph_description:str
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     
 class GraphNode(BaseModel):
     node_id: int
     title: str
-    description:str
+ #   description:str
     type: GraphType
 class GraphEdge(BaseModel):
     source_node: int

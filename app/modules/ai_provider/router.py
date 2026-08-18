@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from .ai_compatibility_layer import AiProvider
+from .services.ai_compatibility_layer import AiProvider
 from sqlalchemy.orm import Session
 from ...core.database import get_db
 from ...core.security import oauth2_scheme
