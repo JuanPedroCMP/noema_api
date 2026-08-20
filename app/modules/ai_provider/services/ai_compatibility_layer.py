@@ -3,14 +3,14 @@ from langchain.chat_models import init_chat_model
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser, PydanticOutputParser
 from langchain_core.runnables import RunnableLambda
-from ...ai.services import list_agent_models, get_ai_model, get_agent, get_provider
-from ....core.db_models.ai_models import AgentModel, AiModel
+from ...ai.services import list_agent_models, get_ai_model, get_agent, get_provider, get_user_api_key, get_user_api_key_can_use_ia_model, list_user_api_key_can_use_ia_model
+from ....core.db_models.ai_models import AgentModel, AiModel, UserApiKey, UserApiKeyCanUseIaModel
 from ...ai.models import AgentModelFilters
 from sqlalchemy.orm import Session
-from ..models import AiGraphResponse
+from ..models import ManipulateGraphResponse
 from uuid import UUID
 from ...ai.services import create_ai_usage_log
-from ...ai.models import AiUsageLogCreate
+from ...ai.models import AiUsageLogCreate, UserApiKeyCanUseIaModelFilters
 from ...auth.service import get_current_user
 import json  
 import groq
@@ -21,6 +21,7 @@ from typing import Any
 from json_repair import loads as repair_json_loads
 from pydantic import BaseModel, ValidationError
 from .services import JsonHelper 
+from app.core.security import decrypt
 
 ### Fazer duas chamadas: uma para criar os nodes e outra para as relações, para evitar erros em grafos grandes. Tambpem arrumar outras formas de economizar tokens
 
@@ -54,11 +55,8 @@ class AiProvider:
             preference_order.append(preference)
         
         return preference_order     
-
-    # TODO Separar modelos que a api key pode utilizar
     
-    # TODO Fazer chain
-    def call_ai(self, user_prompt: str, agent_id: UUID):     
+    def call_ai(self, user_prompt: str, agent_id: UUID) -> str:     
         preference_order = self._calculate_preference_order(agent_id=agent_id)
         preference_order.sort(key=lambda x: x[1], reverse=True)
         agent = get_agent(str(agent_id), self.db)
@@ -70,9 +68,7 @@ class AiProvider:
                 model = agent_model[0]
                 
                 ai_provider = get_provider(db=self.db, identificator=str(model.ai_provider.id))
-                
-                # agent_model = list_agent_models(db=self.db, filters=AgentModelFilters(id_agent=agent_id, ))
-                
+                      
                 system_prompt = ''
                 if agent_model[2].custom_system_prompt == None or agent_model[2].custom_system_prompt == '':
                     system_prompt = agent.base_system_prompt
@@ -86,24 +82,62 @@ class AiProvider:
                 else:
                     temperature = agent_model[2].custom_temperature
                 
-                model = init_chat_model(model.slug, model_provider=ai_provider.slug, temperature=temperature, api_key="")
+                print(1)
+                print(model.id)
+                print(model.display_name)
+                # uapkcuam : UserApiKeyCanUseIaModel = get_user_api_key_can_use_ia_model(db=self.db, identificator=str(model.id), token=self.user_token)
+                filter = dict(id_ai_model=model.id)
+                list_uapkcuam : list[UserApiKeyCanUseIaModel] = list_user_api_key_can_use_ia_model(db=self.db, filters=filter, token=self.user_token)
+                for uapkcuam in list_uapkcuam:
+                    print(2)
+                    print(uapkcuam.id_user_api_key)
+                    print(type(uapkcuam.id_user_api_key))
+                                    
+                    api_key : UserApiKey = get_user_api_key(db=self.db, token=self.user_token, identificator=uapkcuam.id_user_api_key)
 
-                model_struc = model.with_structured_output(AiGraphResponse, include_raw=True,)
+                    ai_model = init_chat_model(model.slug, model_provider=ai_provider.slug, temperature=temperature, api_key=decrypt(api_key.encrypted_key))
+                    break
+                
+                match agent.task:
+                    case "manipulate_graph":
+                        datamodel = ManipulateGraphResponse          ### TODO Continuar a fazer todos os modelos e selecionar modelo da resposta pela task          
+                    case "manipulate_node":
+                        datamodel = ManipulateNodeResponse                      
+                    case "create_study_session":
+                        datamodel = CreateStudySessionResponse                 
+                    case "evaluate_essay_question":
+                        datamodel = EvaluateEssayQuestionResponse
+                    case "create_essay_question":
+                        datamodel = CreateEssayQuestionResponse
+                    case "create_multiple_choice_question":
+                        datamodel = CreateMultipleChoiceQuestionResponse
+                    case "evaluate_multiple_choice_question":
+                        datamodel = EvaluateMultipleChoiceQuestionResponse
+                    case "create_feynman":
+                        datamodel = CreateFeynmanResponse
+                    case "evaluate_feynman":
+                        datamodel = EvaluateFeynmanResponse
+                    case "recommend_study_resource":
+                        datamodel = RecommendStudyResourceResponse
+                    case "study_manager":
+                        datamodel = StudyManagerResponse
+                    case "study_assistent":
+                        datamodel = studyAssistentResponse
+                model_struc = ai_model.with_structured_output(datamodel, include_raw=True)
 
                 prompt = ChatPromptTemplate.from_messages({
                     ("system", system_prompt),
                     ("human", "{user_prompt}"),
                 })
                 
-                parser = PydanticOutputParser(pydantic_object=AiGraphResponse)
                 print(1)
                 chain = (prompt | model_struc)
                 print(2)
                 resultado = chain.invoke({"user_prompt": user_prompt})
                 print(3)
                 raw: dict = resultado["raw"]
-                parsed: AiGraphResponse = resultado["parsed"]
-                print(4)
+                parsed: ManipulateGraphResponse = resultado["parsed"]
+
                 print("///////////////////////////////////////////////\nparsed\n//////////////////////////////////////////////\n")
                 print(parsed.model_dump_json())
                 print(type(parsed.model_dump_json()))
@@ -139,7 +173,7 @@ class AiProvider:
                     try:
                         parsed = json_helper._parse_model_response(
                             failed_generation,
-                            AiGraphResponse,
+                            ManipulateGraphResponse,
                         )
 
                         print("JSON recuperado com sucesso:")
@@ -153,7 +187,7 @@ class AiProvider:
                             ## Segunda tentativa com AI ##
                             #####                    #####
                             prompt = ChatPromptTemplate.from_messages({
-                                ("system", f"{system_prompt}. Continue a gerar o agrafo a seguir."),
+                                ("system", f"Você é o sistema de tratamento de erro da seguinte tarefa: \"{system_prompt}\". Agora concerte: "),
                                 ("human", "{user_prompt}"),
                             })
                             
@@ -162,7 +196,7 @@ class AiProvider:
                             resultado2 = chain2.invoke({"user_prompt": failed_generation})
                             print(22)
                             raw2: dict = resultado2["raw"]
-                            parsed2: AiGraphResponse = resultado2["parsed"]
+                            parsed2: ManipulateGraphResponse = resultado2["parsed"]
                             user = get_current_user(token=self.user_token, db=self.db)
                                
                             create_ai_usage_log(AiUsageLogCreate(
@@ -185,7 +219,7 @@ class AiProvider:
                                     
                                     parsed2 = json_helper._parse_model_response(
                                         failed_generation2,
-                                        AiGraphResponse,
+                                        ManipulateGraphResponse,
                                     )
 
                                     print("JSON recuperado com sucesso:")
@@ -194,17 +228,7 @@ class AiProvider:
 
                                 except ValueError as exc2:
                                     print("Falha ao recuperar resposta da IA:")
-                                    print(exc2)
+                                    print(exc2)                                                                                    
+        raise Exception("Erro na geração")
 
-                                raise                    
-                    continue
-
-                raise
-                print(f"err: {e}")
-                
-                print(type(e))
-                print(repr(e))
-                print(e.__dict__)
-                
-                    
 

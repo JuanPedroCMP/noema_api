@@ -7,7 +7,7 @@ from ...ai.services import list_agent_models, get_ai_model, get_agent, get_provi
 from ....core.db_models.ai_models import AgentModel, AiModel, AiProvider
 from ...ai.models import AgentModelFilters
 from sqlalchemy.orm import Session
-from ..models import AiGraphResponse
+from ..models import ManipulateGraphResponse
 from uuid import UUID
 from ...ai.services import create_ai_usage_log
 from ...ai.models import AiUsageLogCreate
@@ -21,7 +21,8 @@ from typing import Any
 from json_repair import loads as repair_json_loads
 from pydantic import BaseModel, ValidationError
 
-class JsonHelper:  
+class JsonHelper:
+    ## Gerado com AI  
     @staticmethod
     def _normalize_graph_types(data: Any) -> Any:
         """

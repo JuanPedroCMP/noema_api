@@ -18,16 +18,16 @@ class AiResponseOut(BaseModel):
     id_ai_api_key: UUID
     response: Json
     
-class AiGraphResponse(BaseModel):
+class ManipulateGraphResponse(BaseModel):
     graph_title: str
-  #  graph_description:str
+  # graph_description:str
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     
 class GraphNode(BaseModel):
     node_id: int
     title: str
- #   description:str
+  # description:str
     type: GraphType
 class GraphEdge(BaseModel):
     source_node: int

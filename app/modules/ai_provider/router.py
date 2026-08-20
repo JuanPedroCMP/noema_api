@@ -13,5 +13,5 @@ router = APIRouter(
 @router.post("/use_ai")
 def use_ai(user_prompt: str, agent_id: UUID, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     ai_provider = AiProvider(db=db, user_token=token)
-    ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt)
-    return
+    result = ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt)
+    return result

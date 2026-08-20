@@ -80,9 +80,14 @@ def get_ai_model(identificator : str, db: Session):
                 AiModel.id == UUID(identificator),
         ))
     except:
-        ai_model = db.scalar(select(AiModel).where(
+        try:
+           ai_model = db.scalar(select(AiModel).where(
+                 AiModel.id == identificator,
+            ))
+        except:
+             ai_model = db.scalar(select(AiModel).where(
                 AiModel.slug == identificator
-        ))
+             ))
     if ai_model is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Modelo de Ia não encontrado")
         
@@ -340,8 +345,11 @@ def get_user_api_key_can_use_ia_model(identificator: str, db: Session, token: st
             UserApiKey, UserApiKey.id == UserApiKeyCanUseIaModel.id_user_api_key
         )
         .where(
-            UserApiKeyCanUseIaModel.id == UUID(identificator),
-            UserApiKey.id_user == user.id
+            or_(
+                and_(UserApiKeyCanUseIaModel.id == UUID(identificator),
+                    UserApiKey.id_user == user.id),
+                UserApiKeyCanUseIaModel.id_ai_model == UUID(identificator)
+            )
     ))
 
     if user_api_key_can_use_ia_model is None:
