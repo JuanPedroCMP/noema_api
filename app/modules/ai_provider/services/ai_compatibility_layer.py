@@ -20,7 +20,7 @@ import re
 from typing import Any
 from json_repair import loads as repair_json_loads
 from pydantic import BaseModel, ValidationError
-from .services import JsonHelper 
+from .jsonServices import JsonHelper 
 from app.core.security import decrypt
 
 ### Fazer duas chamadas: uma para criar os nodes e outra para as relações, para evitar erros em grafos grandes. Tambpem arrumar outras formas de economizar tokens
