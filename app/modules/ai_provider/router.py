@@ -15,3 +15,9 @@ def use_ai(user_prompt: str, agent_id: UUID, token: str = Depends(oauth2_scheme)
     ai_provider = AiProvider(db=db, user_token=token)
     result = ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt)
     return result
+
+@router.post("/teste")
+def use_ai(user_prompt: str, agent_id: UUID, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    ai_provider = AiProvider(db=db, user_token=token)
+    result = ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt)
+    return result
