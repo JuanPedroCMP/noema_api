@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from app.modules.ai_provider.services.services import getBooks, getPapers, getSearchResuls, getVideos
 from .services.ai_compatibility_layer import AiProvider
 from sqlalchemy.orm import Session
 from ...core.database import get_db
@@ -16,8 +17,18 @@ def use_ai(user_prompt: str, agent_id: UUID, token: str = Depends(oauth2_scheme)
     result = ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt)
     return result
 
-@router.post("/teste")
-def use_ai(user_prompt: str, agent_id: UUID, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    ai_provider = AiProvider(db=db, user_token=token)
-    result = ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt)
-    return result
+@router.post("/teste_papers")
+def use_ai(query: str, token: str = Depends(oauth2_scheme)):
+    return getPapers(query=query)
+
+@router.post("/teste_yt")
+def use_ai(query: str, token: str = Depends(oauth2_scheme)):
+    return getVideos(termo_busca=query)
+
+@router.post("/teste_books")
+def use_ai(query: str, token: str = Depends(oauth2_scheme)):
+    return getBooks(termo_busca=query)
+
+@router.post("/teste_pesquisa")
+async def use_ai(query: str, token: str = Depends(oauth2_scheme)): 
+    return await getSearchResuls(query=query)
