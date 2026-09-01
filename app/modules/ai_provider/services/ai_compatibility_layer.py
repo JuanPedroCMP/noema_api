@@ -7,7 +7,7 @@ from ...ai.services import list_agent_models, get_ai_model, get_agent, get_provi
 from ....core.db_models.ai_models import AgentModel, AiModel, UserApiKey, UserApiKeyCanUseIaModel
 from ...ai.models import AgentModelFilters
 from sqlalchemy.orm import Session
-from ..models import ManipulateGraphResponse
+from ..models import ManipulateGraphResponse, SearchQueries
 from uuid import UUID
 from ...ai.services import create_ai_usage_log
 from ...ai.models import AiUsageLogCreate, UserApiKeyCanUseIaModelFilters
@@ -101,6 +101,8 @@ class AiProvider:
                 match agent.task:
                     case "manipulate_graph":
                         datamodel = ManipulateGraphResponse          ### TODO Continuar a fazer todos os modelos e selecionar modelo da resposta pela task          
+                    case "gerenerate_resource_search_prompts":
+                        datamodel = SearchQueries
                     case "manipulate_node":
                         datamodel = ManipulateNodeResponse                      
                     case "create_study_session":
