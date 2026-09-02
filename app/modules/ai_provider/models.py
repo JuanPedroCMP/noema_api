@@ -39,6 +39,12 @@ class GraphEdge(BaseModel):
 ###################
 ### External resources query generation
 ###################
+class ExternalResourcesOut(BaseModel):
+    papers: S2SearchResult
+    search_results: TavilyResponse
+    yt_videos: YtSearchResult
+    books: GbBook
+
 class SearchQueries(BaseModel):
     paper_query: str
     search_query: str
@@ -76,35 +82,47 @@ class YtThumbnail(BaseModel):
     width:  int
     height: int
 
-### Papers
+from pydantic import BaseModel, Field
+
+
 class S2SearchResult(BaseModel):
     total: int
     offset: int
     next: int | None = None
     data: list["S2Paper"]
 
+
 class S2Paper(BaseModel):
     paperId: str
     externalIds: "S2ExternalIds | None" = None
     corpusId: int | None = None
+
     publicationVenue: "S2PublicationVenue | None" = None
+
     url: str | None = None
     title: str
     venue: str | None = None
     year: int | None = None
+
     referenceCount: int
     citationCount: int
     influentialCitationCount: int
+
     isOpenAccess: bool
     openAccessPdf: "S2OpenAccessPdf | None" = None
+
     fieldsOfStudy: list[str] | None = None
-    s2FieldsOfStudy: list["S2FieldOfStudy"] = []
+    s2FieldsOfStudy: list["S2FieldOfStudy"] = Field(default_factory=list)
+
     publicationTypes: list[str] | None = None
     publicationDate: str | None = None
+
     journal: "S2Journal | None" = None
     citationStyles: "S2CitationStyles | None" = None
+
     authors: list["S2Author"]
     abstract: str | None = None
+
 
 class S2ExternalIds(BaseModel):
     DOI: str | None = None
@@ -113,6 +131,7 @@ class S2ExternalIds(BaseModel):
     PubMed: str | None = None
     DBLP: str | None = None
 
+
 class S2PublicationVenue(BaseModel):
     id: str | None = None
     name: str
@@ -120,28 +139,32 @@ class S2PublicationVenue(BaseModel):
     alternate_names: list[str] | None = None
     url: str | None = None
 
+
 class S2OpenAccessPdf(BaseModel):
     url: str | None = None
     status: str | None = None
     license: str | None = None
     disclaimer: str | None = None
 
+
 class S2FieldOfStudy(BaseModel):
     category: str
     source: str
+
 
 class S2Journal(BaseModel):
     name: str
     volume: str | None = None
     pages: str | None = None
 
+
 class S2CitationStyles(BaseModel):
     bibtex: str | None = None
+
 
 class S2Author(BaseModel):
     authorId: str | None = None
     name: str
-
 ### Books    
 class GbBook(BaseModel):
     kind: str

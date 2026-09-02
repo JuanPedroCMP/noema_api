@@ -38,6 +38,8 @@ def getVideos(termo_busca: str, max_resultados: int = 10):
         titulo = item["snippet"]["title"]
         video_id = item["id"]["videoId"]
         canal = item["snippet"]["channelTitle"]
+        
+        print(resposta)
 
         print(f"Título: {titulo}")
         print(f"Canal: {canal}")
@@ -45,7 +47,7 @@ def getVideos(termo_busca: str, max_resultados: int = 10):
         print("-" * 40)
     return resposta.get("items", [])
  
-async def getSearchResuls(query: str):
+def getSearchResuls(query: str):
     # To install: pip install tavily-python  
     response = clientTavily.search(
         query=query,

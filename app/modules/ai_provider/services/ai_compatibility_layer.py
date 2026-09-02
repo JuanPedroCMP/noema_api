@@ -87,13 +87,13 @@ class AiProvider:
                 print(model.display_name)
                 # uapkcuam : UserApiKeyCanUseIaModel = get_user_api_key_can_use_ia_model(db=self.db, identificator=str(model.id), token=self.user_token)
                 filter = dict(id_ai_model=model.id)
-                list_uapkcuam : list[UserApiKeyCanUseIaModel] = list_user_api_key_can_use_ia_model(db=self.db, filters=filter, token=self.user_token)
+                list_uapkcuam : list[UserApiKeyCanUseIaModel] =  list_user_api_key_can_use_ia_model(db=self.db, filters=filter, token=self.user_token)
                 for uapkcuam in list_uapkcuam:
                     print(2)
                     print(uapkcuam.id_user_api_key)
                     print(type(uapkcuam.id_user_api_key))
                                     
-                    api_key : UserApiKey = get_user_api_key(db=self.db, token=self.user_token, identificator=uapkcuam.id_user_api_key)
+                    api_key : UserApiKey =  get_user_api_key(db=self.db, token=self.user_token, identificator=uapkcuam.id_user_api_key)
 
                     ai_model = init_chat_model(model.slug, model_provider=ai_provider.slug, temperature=temperature, api_key=decrypt(api_key.encrypted_key))
                     break
@@ -101,7 +101,7 @@ class AiProvider:
                 match agent.task:
                     case "manipulate_graph":
                         datamodel = ManipulateGraphResponse          ### TODO Continuar a fazer todos os modelos e selecionar modelo da resposta pela task          
-                    case "gerenerate_resource_search_prompts":
+                    case "recommend_study_resource":
                         datamodel = SearchQueries
                     case "manipulate_node":
                         datamodel = ManipulateNodeResponse                      
@@ -119,8 +119,7 @@ class AiProvider:
                         datamodel = CreateFeynmanResponse
                     case "evaluate_feynman":
                         datamodel = EvaluateFeynmanResponse
-                    case "recommend_study_resource":
-                        datamodel = RecommendStudyResourceResponse
+                 
                     case "study_manager":
                         datamodel = StudyManagerResponse
                     case "study_assistent":
@@ -135,14 +134,14 @@ class AiProvider:
                 print(1)
                 chain = (prompt | model_struc)
                 print(2)
-                resultado = chain.invoke({"user_prompt": user_prompt})
+                resultado =  chain.invoke({"user_prompt": user_prompt})
                 print(3)
                 raw: dict = resultado["raw"]
-                parsed: ManipulateGraphResponse = resultado["parsed"]
+                parsed_result: ManipulateGraphResponse = resultado["parsed"]
 
                 print("///////////////////////////////////////////////\nparsed\n//////////////////////////////////////////////\n")
-                print(parsed.model_dump_json())
-                print(type(parsed.model_dump_json()))
+                print(parsed_result.model_dump_json())
+                print(type(parsed_result.model_dump_json()))
                 
                 print("///////////////////////////////////////////////\nusage_metadata\n//////////////////////////////////////////////\n")
                 print(raw.usage_metadata)
@@ -157,7 +156,7 @@ class AiProvider:
                 print(agent_model[2].id)
                 print(type(agent_model[2].id))
                 
-                user = get_current_user(token=self.user_token, db=self.db)
+                user =  get_current_user(token=self.user_token, db=self.db)
                 
                 
                 create_ai_usage_log(AiUsageLogCreate(
@@ -165,7 +164,7 @@ class AiProvider:
                     id_user=user.id,
                     usage_details=raw.response_metadata,
                 ), self.db, self.user_token)
-                return resultado
+                return parsed_result
             
             except groq.BadRequestError as e:
                 error = e.body.get("error", {})
@@ -173,14 +172,14 @@ class AiProvider:
                 if error.get("code") == "tool_use_failed":
                     failed_generation = error.get("failed_generation")
                     try:
-                        parsed = json_helper._parse_model_response(
+                        parsed_result = json_helper._parse_model_response(
                             failed_generation,
                             ManipulateGraphResponse,
                         )
 
                         print("JSON recuperado com sucesso:")
-                        print(parsed.model_dump_json(indent=2))
-                        return parsed.model_dump_json(indent=2)
+                        print(parsed_result.model_dump_json(indent=2))
+                        return parsed_result
 
                     except Exception as exepition:
                         try:
@@ -195,11 +194,11 @@ class AiProvider:
                             
                             print(11)
                             chain2 = (prompt | model_struc)
-                            resultado2 = chain2.invoke({"user_prompt": failed_generation})
+                            resultado2 =  chain2.invoke({"user_prompt": failed_generation})
                             print(22)
                             raw2: dict = resultado2["raw"]
                             parsed2: ManipulateGraphResponse = resultado2["parsed"]
-                            user = get_current_user(token=self.user_token, db=self.db)
+                            user =  get_current_user(token=self.user_token, db=self.db)
                                
                             create_ai_usage_log(AiUsageLogCreate(
                                 id_agent_model= str(agent_model[2].id),
@@ -207,7 +206,7 @@ class AiProvider:
                                 usage_details=raw2.response_metadata,
                             ), self.db, self.user_token)
                             print(resultado2)
-                            return resultado2
+                            return parsed2
                         except groq.BadRequestError as ebr2:
                             error2 = ebr2.body.get("error", {})
                             print("\n===> exept groq\n")
@@ -226,7 +225,7 @@ class AiProvider:
 
                                     print("JSON recuperado com sucesso:")
                                     print(parsed2.model_dump_json(indent=2))
-                                    return parsed2.model_dump_json(indent=2)
+                                    return parsed2
 
                                 except ValueError as exc2:
                                     print("Falha ao recuperar resposta da IA:")
