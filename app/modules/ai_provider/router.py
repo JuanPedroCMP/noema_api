@@ -32,7 +32,7 @@ async def get_materials(user_prompt: str, agent_id: UUID, token: str = Depends(o
     # videos_adapter = TypeAdapter(list[YtSearchResult])
     # videos : list[YtSearchResult] = videos_adapter.validate_python(getVideos(result.yt_videos_query))
     
-    # books_adpter = TypeAdapter(list[GbBook])
+    # books_adpter = TypeAdapter(list[GbBook])j
     # books : list[GbBook] = books_adpter.validate_python(getBooks(result.books_query))
     
     # research = TavilyResponse(**getSearchResuls(result.search_query))
