@@ -40,10 +40,10 @@ class GraphEdge(BaseModel):
 ### External resources query generation
 ###################
 class ExternalResourcesOut(BaseModel):
-    papers: S2SearchResult
+    papers: list[S2SearchResult]
     search_results: TavilyResponse
-    yt_videos: YtSearchResult
-    books: GbBook
+    yt_videos: list[YtSearchResult]
+    books: list[GbBook]
 
 class SearchQueries(BaseModel):
     paper_query: str
