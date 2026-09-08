@@ -29,6 +29,7 @@ class User(Base):
     is_verified: Mapped[Optional[bool]] = mapped_column(Boolean, server_default=text('false'))
 
     google_account: Mapped['GoogleAccount'] = relationship('GoogleAccount', uselist=False, back_populates='user')
+    password_reset_token: Mapped[list['PasswordResetToken']] = relationship('PasswordResetToken', back_populates='user')
 
 
 class GoogleAccount(Base):
@@ -56,3 +57,21 @@ class GoogleAccount(Base):
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
 
     user: Mapped['User'] = relationship('User', back_populates='google_account')
+
+
+class PasswordResetToken(Base):
+    __tablename__ = 'password_reset_token'
+    __table_args__ = (
+        ForeignKeyConstraint(['user_id'], ['app_auth.user.id'], name='fk_user_id_pwd_reset_token'),
+        PrimaryKeyConstraint('id', name='pk_pwd_reset_token'),
+        {'schema': 'app_auth'}
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), nullable=False, server_default=text('now()'))
+    expires_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), nullable=False)
+    used_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
+
+    user: Mapped['User'] = relationship('User', back_populates='password_reset_token')

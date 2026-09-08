@@ -1,13 +1,14 @@
 from ...core.security import create_access_token, verify_password, get_current_user, decrypt, encrypt
 from ...core.database import get_db
 from sqlalchemy.orm import Session
-from ...core.db_models.app_auth_models import User, GoogleAccount
+from ...core.db_models.app_auth_models import PasswordResetToken, User, GoogleAccount
 from authlib.integrations.starlette_client import OAuth
 from .models import LoginData, GoogleAccountCreate, GoogleAccountUpdate
 from sqlalchemy import select, or_
 from fastapi import HTTPException, status
 from uuid import UUID, uuid4
 from datetime import datetime
+import random
 
 
 def login(login_data: LoginData, db: Session) -> dict:
@@ -37,6 +38,22 @@ def login(login_data: LoginData, db: Session) -> dict:
     "access_token": token,
     "token_type": "bearer"
     }
+  
+def reset_password(token: str, db: Session):
+  code = random.randint(100000, 999999)
+    
+  pwd_reset = PasswordResetToken(
+    id = uuid4(),
+    user_id = token
+    token_hash = hash_password(code),
+  ) ## TODO Enviar email
+            
+  db.add(pwd_reset)
+  db.commit()
+  db.refresh(instance=pwd_reset)
+            
+  print(code)
+  return
   
 ################
 ### Google Account

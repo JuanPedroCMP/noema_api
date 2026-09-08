@@ -36,6 +36,38 @@ class GraphEdge(BaseModel):
     target_node: int
     type: EdgeType
     
+
+##################
+### EvaluateEssayQuestionResponse
+##################
+class EvaluateEssayQuestionResponse(BaseModel):
+    feedback: str
+    conceptualRequisites: ConceptualRequisites
+    textCoerence: TextCoerence
+    
+class EvaluateFeynmanResponse(BaseModel):
+    feedback: str
+    conceptualRequisites: ConceptualRequisites
+    textCoerence: TextCoerence
+    feynmanRequisites: FeynmanRequisites
+       
+class FeynmanRequisites:
+    explanation_acessibility: int = Field(me=0, le=100)
+    logic_progression: int = Field(me=0, le=100)
+    gaps: int = Field(me=0, le=100)
+    
+
+class ConceptualRequisites(BaseModel): ## TODO Verificar inglês
+    fidelity_to_question: int = Field(me=0, le=100)
+    teoric_precision: int = Field(me=0, le=100)
+    response_deep: int = Field(me=0, le=100)
+    
+class TextCoerence:
+    coerence: int = Field(me=0, le=100)
+    argument_struct: int = Field(me=0, le=100)
+    argument_clarity: int = Field(me=0, le=100)
+    
+
 ###################
 ### External resources query generation
 ###################

@@ -7,7 +7,7 @@ from ...ai.services import list_agent_models, get_ai_model, get_agent, get_provi
 from ....core.db_models.ai_models import AgentModel, AiModel, UserApiKey, UserApiKeyCanUseIaModel
 from ...ai.models import AgentModelFilters
 from sqlalchemy.orm import Session
-from ..models import ManipulateGraphResponse, SearchQueries
+from ..models import EvaluateEssayQuestionResponse, ManipulateGraphResponse, SearchQueries
 from uuid import UUID
 from ...ai.services import create_ai_usage_log
 from ...ai.models import AiUsageLogCreate, UserApiKeyCanUseIaModelFilters
@@ -119,7 +119,6 @@ class AiProvider:
                         datamodel = CreateFeynmanResponse
                     case "evaluate_feynman":
                         datamodel = EvaluateFeynmanResponse
-                 
                     case "study_manager":
                         datamodel = StudyManagerResponse
                     case "study_assistent":
