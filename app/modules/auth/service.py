@@ -1,4 +1,4 @@
-from ...core.security import create_access_token, verify_password, get_current_user, decrypt, encrypt
+from ...core.security import create_access_token, hash_password, verify_password, get_current_user, decrypt, encrypt
 from ...core.database import get_db
 from sqlalchemy.orm import Session
 from ...core.db_models.app_auth_models import PasswordResetToken, User, GoogleAccount
@@ -9,6 +9,9 @@ from fastapi import HTTPException, status
 from uuid import UUID, uuid4
 from datetime import datetime
 import random
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 
 def login(login_data: LoginData, db: Session) -> dict:
@@ -44,9 +47,39 @@ def reset_password(token: str, db: Session):
     
   pwd_reset = PasswordResetToken(
     id = uuid4(),
-    user_id = token
+    user_id = token,
     token_hash = hash_password(code),
-  ) ## TODO Enviar email
+  )
+  
+  user = get_current_user(token=token, db=db)
+  
+  
+  # Configurações de e-mail
+  remetente = "noema.app.services@gmail.com"
+  senha = "wskc nibs blbr qzqx"
+  destinatario = user.primary_email
+  assunto = "" ## TODO Continuar
+
+  # Criando a estrutura da mensagem
+  msg = MIMEMultipart()
+  msg["From"] = remetente
+  msg["To"] = destinatario
+  msg["Subject"] = assunto
+
+  corpo = "Olá! Este é um teste de envio de e-mail automatizado usando Python e Gmail."
+  msg.attach(MIMEText(corpo, "plain"))
+
+  # Conexão com o servidor SMTP do Gmail
+  try:
+      # Usando a porta 587 com TLS
+      servidor = smtplib.SMTP("smtp.gmail.com", 587)
+      servidor.starttls()
+      servidor.login(remetente, senha)
+      servidor.sendmail(remetente, destinatario, msg.as_string())
+      servidor.quit()
+      print("E-mail enviado com sucesso!")
+  except Exception as e:
+      print(f"Erro ao enviar e-mail: {e}")
             
   db.add(pwd_reset)
   db.commit()
