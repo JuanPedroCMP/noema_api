@@ -1,13 +1,16 @@
+from app.modules.user.models import UserUpdate
+from app.modules.user.service import up_user
+
 from ...core.security import create_access_token, hash_password, verify_password, get_current_user, decrypt, encrypt
 from ...core.database import get_db
 from sqlalchemy.orm import Session
 from ...core.db_models.app_auth_models import PasswordResetToken, User, GoogleAccount
 from authlib.integrations.starlette_client import OAuth
 from .models import LoginData, GoogleAccountCreate, GoogleAccountUpdate
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, and_
 from fastapi import HTTPException, status
 from uuid import UUID, uuid4
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import random
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -42,33 +45,54 @@ def login(login_data: LoginData, db: Session) -> dict:
     "token_type": "bearer"
     }
   
-def reset_password(token: str, db: Session):
-  code = random.randint(100000, 999999)
+def start_reset_password(token: str, db: Session):
+  code : str = str(random.randint(100000, 999999))
+  created_at = datetime.now(),
+  expires_at = datetime.now() + timedelta(hours=1)
+  
+  user = get_current_user(token=token, db=db)
     
   pwd_reset = PasswordResetToken(
     id = uuid4(),
-    user_id = token,
+    user_id = user.id,
     token_hash = hash_password(code),
+    created_at = created_at,
+    expires_at = expires_at
   )
-  
-  user = get_current_user(token=token, db=db)
-  
   
   # Configurações de e-mail
   remetente = "noema.app.services@gmail.com"
-  senha = "wskc nibs blbr qzqx"
+  senha = "wuvs uyaq xmjp tfxo"
   destinatario = user.primary_email
-  assunto = "" ## TODO Continuar
+  assunto = "Redefinição de senha" ## TODO Continuar
 
   # Criando a estrutura da mensagem
   msg = MIMEMultipart()
   msg["From"] = remetente
   msg["To"] = destinatario
   msg["Subject"] = assunto
+  
+  
+  # Corpo do e-mail em HTML
+  html_content = f"""
+  <html>
+    <body>
+      <h2 style="color: #2e6c80;">Olá!</h2>
+      <p>Este é um e-mail formatado com <b>HTML</b> usando Python. Código de redefinição de senha:</p>
+      <p>Requisitado em: {created_at}; Expira em: {expires_at}</p>
+      <big><b><p>{code}</big></b></p>
+    </body>
+  </html>
+  """
 
-  corpo = "Olá! Este é um teste de envio de e-mail automatizado usando Python e Gmail."
-  msg.attach(MIMEText(corpo, "plain"))
+  
+  db.add(pwd_reset)
+  db.commit()
+  db.refresh(instance=pwd_reset)
 
+  # Anexando o conteúdo HTML à mensagem
+  msg.attach(MIMEText(html_content, "html", "utf-8"))
+  
   # Conexão com o servidor SMTP do Gmail
   try:
       # Usando a porta 587 com TLS
@@ -81,12 +105,28 @@ def reset_password(token: str, db: Session):
   except Exception as e:
       print(f"Erro ao enviar e-mail: {e}")
             
-  db.add(pwd_reset)
-  db.commit()
-  db.refresh(instance=pwd_reset)
-            
   print(code)
   return
+
+def confirm_password_reset(code: str, token: str, db: Session, new_password):
+  user = get_current_user(token=token, db=db)
+  
+  reset_call =  db.scalar(select(PasswordResetToken).where(
+    and_(
+      PasswordResetToken.user_id == user.id,
+      PasswordResetToken.used_at == None,
+      PasswordResetToken.expires_at > datetime.now(),
+      PasswordResetToken.token_hash == hash_password(code)
+  )))
+  
+  if(reset_call != None):
+    reset_call.used_at = datetime.now()
+    db.commit()
+    db.refresh(reset_call)
+    up_user(UserUpdate(password=new_password))
+    return 'Sucesso' ## TODO concertar
+  return 'Falha'
+
   
 ################
 ### Google Account
