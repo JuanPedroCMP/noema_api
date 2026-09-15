@@ -48,14 +48,14 @@ def login(login_data: LoginData, db: Session) -> dict:
 def start_reset_password(token: str, db: Session):
   code : str = str(random.randint(100000, 999999))
   created_at = datetime.now(),
-  expires_at = datetime.now() + timedelta(hours=1)
+  expires_at = datetime.now() + timedelta(minutes=10)
   
   user = get_current_user(token=token, db=db)
     
   pwd_reset = PasswordResetToken(
     id = uuid4(),
     user_id = user.id,
-    token_hash = hash_password(code),
+    token_hash = code,
     created_at = created_at,
     expires_at = expires_at
   )
@@ -64,6 +64,7 @@ def start_reset_password(token: str, db: Session):
   remetente = "noema.app.services@gmail.com"
   senha = "wuvs uyaq xmjp tfxo"
   destinatario = user.primary_email
+  
   assunto = "Redefinição de senha" ## TODO Continuar
 
   # Criando a estrutura da mensagem
@@ -111,19 +112,21 @@ def start_reset_password(token: str, db: Session):
 def confirm_password_reset(code: str, token: str, db: Session, new_password):
   user = get_current_user(token=token, db=db)
   
-  reset_call =  db.scalar(select(PasswordResetToken).where(
-    and_(
-      PasswordResetToken.user_id == user.id,
-      PasswordResetToken.used_at == None,
-      PasswordResetToken.expires_at > datetime.now(),
-      PasswordResetToken.token_hash == hash_password(code)
-  )))
-  
-  if(reset_call != None):
+  reset_call = db.scalar(
+    select(PasswordResetToken).where(
+      and_(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.used_at.is_(None),
+        PasswordResetToken.expires_at > datetime.now(),
+        PasswordResetToken.token_hash == code,
+      )
+    )
+  )
+  if reset_call:
     reset_call.used_at = datetime.now()
     db.commit()
     db.refresh(reset_call)
-    up_user(UserUpdate(password=new_password))
+    up_user(user_data=UserUpdate(password=new_password), db=db, token=token)
     return 'Sucesso' ## TODO concertar
   return 'Falha'
 
