@@ -1,0 +1,179 @@
+[33mcommit baf880a5949938f80f9e5f07960be96b751cdbed[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Tue Sep 15 16:29:26 2026 -0300
+
+    Salvando
+
+[33mcommit 4ce4f0483ff470df4bf1fd826aef90c1ed76450e[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Mon Sep 14 18:09:25 2026 -0300
+
+    Salvando
+
+[33mcommit b01f1b43e8ce137816103487f77087d5a1e957ed[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Thu Sep 10 15:28:54 2026 -0300
+
+    Continuando desenvolvimendo da redefinição de senha
+
+[33mcommit 0cc4a3d1f6db6110fec6a20db65dd943c4f24570[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Tue Sep 8 16:35:39 2026 -0300
+
+    Salvando
+
+[33mcommit ad0fe758f4fbe976ac9cc4bdfd0f4417b542b34d[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Thu Sep 3 15:31:26 2026 -0300
+
+    Salvando
+
+[33mcommit 9e99f25346bd5f2886b0da0b8a0c1c8abe3c13ba[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Thu Sep 3 13:37:37 2026 -0300
+
+    Continuando o desenvolvimento...
+
+[33mcommit c3bb405883f6e60e650bf72e8c7fda2c0399197b[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Wed Sep 2 16:37:55 2026 -0300
+
+    Continuando desenvolvimento
+
+[33mcommit 04f67d622ad18229d7230f5f0a64ee4276d0c196[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Tue Sep 1 16:33:10 2026 -0300
+
+    Continuando desenvolvimento...
+
+[33mcommit efacceba8cec68247f0f3099a39c4a7bcda1f8a3[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Tue Sep 1 16:32:42 2026 -0300
+
+    Continuando desenvolvimento...
+
+[33mcommit ac99e5f25211d8993ef579d5dc08d13658650fb1[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Thu Aug 27 15:18:04 2026 -0300
+
+    Desenvolvendo endpoint que vai fornecer os recursos de aprendizagem externo de cada node
+
+[33mcommit bb797496465420457a142cf9c3fbc60c74a51b3b[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Wed Aug 26 16:33:35 2026 -0300
+
+    Desenvolvimento
+
+[33mcommit 8e9e0931fe418ec7ad3935d1b84a45a0a138354a[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Tue Aug 25 16:32:47 2026 -0300
+
+    Desenvolvendo parte da api de obtenção de conteúdos de apredizagen externo
+
+[33mcommit 0517ca7f90a1a76984033a08822ad631c570b48a[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Thu Aug 20 15:22:43 2026 -0300
+
+    Endpointe básico de uso de IA concluido
+
+[33mcommit 88bfc12554885f4f1a9192e928ff0476b311a2e3[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Tue Aug 18 16:34:21 2026 -0300
+
+    Desenvolvendo api de comunicação com as IAs...
+
+[33mcommit dbc1602166bdd7d730bc89cd4460b152d528bb9d[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Tue Aug 18 11:08:30 2026 -0300
+
+    Atualização requirements.txt
+
+[33mcommit 6d14d550954bf58e40fd14f04e6b59a58e796c3f[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Mon Aug 17 10:33:35 2026 -0300
+
+    Desenvolvimento da api para usar a ia (em andamento)
+
+[33mcommit 00ca762a10a76e10746cbfc802b90bf0a6ddd951[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Thu Aug 13 15:31:31 2026 -0300
+
+    Update AI compatibility layer
+
+[33mcommit d2b3544d966b1e0e2008bf77c147ba9f96a8505a[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Wed Aug 12 16:29:47 2026 -0300
+
+    Inicio do desenvolvimento da camada de uso e compatibilidade da ia
+
+[33mcommit 9c3a254efe59caf969c6572e94892fdfdaf1f429[m
+Author: JUAN PEDRO DE CAMARGO MARTINS PEREIRA <240238@lti.fatecso.edu.br>
+Date:   Tue Aug 4 16:21:48 2026 -0300
+
+    Início do desenvolvimento das APIs que interagem com os modelos de ia
+
+[33mcommit 1a71990fbb44bfd1e869b69bdd6a67515e09948d[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Fri Jul 31 21:22:24 2026 -0300
+
+    correção de nome de arquivo
+
+[33mcommit 26ee780963da23dae4cbb76a6cb2b0468508601f[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Fri Jul 31 21:21:30 2026 -0300
+
+    correção de nome de arquivo
+
+[33mcommit 71839089a4f3d49ea9936126926f48c09db29bc5[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Wed Jul 29 15:48:44 2026 -0300
+
+    Pequena correção
+
+[33mcommit 0f40bcf7977983bf19aef1c8949602d74d5b5e6f[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Wed Jul 29 15:47:03 2026 -0300
+
+    Adicção de response model ondo não tinha
+
+[33mcommit 48eed6a4794461d9c1c072e2a8c5e5516ec576c6[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Sat Jul 25 14:06:02 2026 -0300
+
+    atualização dos requisitos python
+
+[33mcommit 0f8c1511f5edb907b8a54e7077f4f7fd85323a4a[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Fri Jul 24 23:12:17 2026 -0300
+
+    Correção de um erro
+
+[33mcommit 6154b008617f55b14f89af9bcba39fefa465ad42[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Fri Jul 24 12:48:59 2026 -0300
+
+    Todos endpaoints necessários para po início do desenvolvimento do app adicionados
+
+[33mcommit 0c2abff0ee507cb9f8243b1b7d988eec7c3bba69[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Tue Jul 21 15:35:02 2026 -0300
+
+    Adição de endpoints de multiplos schemas
+
+[33mcommit 9af8e6bdf6596bc61fb92db30ff954f49b366291[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Mon Jul 20 01:57:21 2026 -0300
+
+    Adição das rotas do schema ai
+
+[33mcommit e4e7b6b89c9865c28a557b7e7e0ad1677ca6bf12[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Fri Jul 17 12:48:47 2026 -0300
+
+    Separação de responsabilidades users - router, service
+
+[33mcommit a24200c00867553c10b4e480bfa1cdafe77bf9cf[m
+Author: Juan CMP <juanpedrocmp.15@gmail.com>
+Date:   Thu Jul 16 23:26:46 2026 -0300
+
+    commit inicial - auth básico e crud usuário

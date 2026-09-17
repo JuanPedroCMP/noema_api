@@ -49,3 +49,5 @@ def update_google_account(identificator: str, google_account_data: GoogleAccount
 def delete_google_account(identificator: str, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     sucess = dga(token, identificator, db)
     return sucess
+
+
