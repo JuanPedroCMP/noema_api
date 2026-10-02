@@ -1,5 +1,5 @@
 from app.modules.user.models import UserUpdate
-from app.modules.user.service import up_user
+from app.modules.user.service import get_user_by_identificator, up_user
 
 from ...core.security import create_access_token, hash_password, verify_password, get_current_user, decrypt, encrypt
 from ...core.database import get_db
@@ -50,7 +50,7 @@ def start_reset_password(token: str, db: Session):
   created_at = datetime.now(),
   expires_at = datetime.now() + timedelta(minutes=10)
   
-  user = get_current_user(token=token, db=db)
+  user = get_user_by_identificator(db=db, identificator=token)
     
   pwd_reset = PasswordResetToken(
     id = uuid4(),
@@ -110,7 +110,8 @@ def start_reset_password(token: str, db: Session):
   return
 
 def confirm_password_reset(code: str, token: str, db: Session, new_password):
-  user = get_current_user(token=token, db=db)
+  user = get_user_by_identificator(db=db, identificator=token)
+
   
   reset_call = db.scalar(
     select(PasswordResetToken).where(
@@ -126,7 +127,19 @@ def confirm_password_reset(code: str, token: str, db: Session, new_password):
     reset_call.used_at = datetime.now()
     db.commit()
     db.refresh(reset_call)
-    up_user(user_data=UserUpdate(password=new_password), db=db, token=token)
+    
+    user_data = UserUpdate(password=new_password)
+    udp_data = dict()
+    for k, v in user_data.model_dump(exclude_unset=True, exclude_none=True, exclude_defaults=True).items():  
+            if k == "password":
+                user.password_hash = hash_password(v)
+                udp_data[k] = "**********"
+            else:
+                udp_data[k] = v
+                setattr(user, k, v)
+    user.updated_at = datetime.now()
+    db.commit()
+    db.refresh(user)
     return 'Sucesso' ## TODO concertar
   return 'Falha'
 
