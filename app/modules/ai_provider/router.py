@@ -14,15 +14,15 @@ router = APIRouter(
 )
 
 @router.post("/use_ai")
-def use_ai(user_prompt: str, agent_id: UUID, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+async def use_ai(user_prompt: str, agent_id: UUID, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     ai_provider = AiProvider(db=db, user_token=token)
-    result = ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt)
+    result = await ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt)
     return result
 
 @router.post("/get_materials")
-async def get_materials(user_prompt: str, agent_id: UUID, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+async def get_materials(user_prompt: str, agent_id: UUID, get_videos : bool = True, get_books : bool = True, get_papers : bool = True, get_web : bool = True,token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     ai_provider = AiProvider(db=db, user_token=token)
-    result : SearchQueries = ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt) ## Gerar o pronpt para cada pesquisa TODO: Fazer modelo pydantic para gerar os dados
+    result : SearchQueries = await ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt) ## Gerar o pronpt para cada pesquisa TODO: Fazer modelo pydantic para gerar os dados
     # ## Pega o pronpt e faz cada pesquisa
     # print(result.paper_query)
     
@@ -53,33 +53,40 @@ async def get_materials(user_prompt: str, agent_id: UUID, token: str = Depends(o
     # final_result: ExternalResourcesOut = ExternalResourcesOut(books=books, papers=papers, search_results=research, yt_videos=videos)
     # print(type(final_result))
     # print(final_result)
+    papers = []
+    if get_papers:
+        try:
+            papers = await getPapers(result.paper_query)
+        except Exception as err:
+            papers = []
+            print(err)
+      
+    videos = []      
+    if get_videos:      
+        try:
+            videos = await getVideos(result.yt_videos_query)
+        except Exception as err:
+            videos = []
+            print(err)
     
-    try:
-        papers = getPapers(result.paper_query)
-    except Exception as err:
-        papers = []
-        print(err)
-        
-    try:
-        videos = getVideos(result.yt_videos_query)
-    except Exception as err:
-        videos = []
-        print(err)
-        
-    try:
-        books = getBooks(result.books_query)
-    except Exception as err:
-        books = []
-        print(err)
-        
-    try:
-        research = getSearchResuls(result.search_query)
-    except Exception as err:   
-        research = []
-        print(err)
-        
+    books = []        
+    if get_books:        
+        try:
+            books = await getBooks(result.books_query)
+        except Exception as err:
+            books = []
+            print(err)
+    
+    research = []
+    if get_web:    
+        try:
+            research = await getSearchResuls(result.search_query)
+        except Exception as err:   
+            research = []
+            print(err)
+            
 
-    final_result = (papers, videos, books, research)
+    final_result = (papers or [], videos or [], books or [], research or [])
 
     
     print(final_result)
@@ -91,25 +98,25 @@ async def get_materials(user_prompt: str, agent_id: UUID, token: str = Depends(o
 
 
 ### TESTES
-@router.post("/teste_papers")
+@router.post("/get_papers")
 def use1_ai(query: str, token: str = Depends(oauth2_scheme)):
     result = getPapers(query=query)
     print(type(result))
     return result 
 
-@router.post("/teste_yt")
+@router.post("/get_yt")
 def use2_ai(query: str, token: str = Depends(oauth2_scheme)):
     result = getVideos(termo_busca=query)
     print(type(result))
     return result 
 
-@router.post("/teste_books")
+@router.post("/get_books")
 def use3_ai(query: str, token: str = Depends(oauth2_scheme)):
     result = getBooks(termo_busca=query)
     print(type(result))
     return result 
 
-@router.post("/teste_pesquisa")
+@router.post("/get_pesquisa")
 def use4_ai(query: str, token: str = Depends(oauth2_scheme)): 
     result =  getSearchResuls(query=query)
     print(type(result))

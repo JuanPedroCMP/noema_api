@@ -14,13 +14,13 @@ tavily_api_key = os.getenv("TAVILY_API")
 ss = SemanticScholar(api_key=ss_api_key)
 clientTavily = TavilyClient(tavily_api_key)
 
-def getPapers(query: str):
+async def getPapers(query: str):
     result = ss.search_paper(query=query)
     print(result.raw_data)   
     return result.raw_data
 
 
-def getVideos(termo_busca: str, max_resultados: int = 10):
+async def getVideos(termo_busca: str, max_resultados: int = 10):
     # Constrói o serviço da API do YouTube
     youtube = build("youtube", "v3", developerKey=yt_api_key)
     
@@ -47,7 +47,7 @@ def getVideos(termo_busca: str, max_resultados: int = 10):
         print("-" * 40)
     return resposta.get("items", [])
  
-def getSearchResuls(query: str):
+async def getSearchResuls(query: str):
     # To install: pip install tavily-python  
     response = clientTavily.search(
         query=query,
@@ -58,7 +58,7 @@ def getSearchResuls(query: str):
     print(response)
     return response
 
-def getBooks(termo_busca: str):  
+async def getBooks(termo_busca: str):  
     # Inicializa o serviço para a API 'books' na versão 'v1'
     # Se tiver uma chave, use: build('books', 'v1', developerKey='SUA_CHAVE_AQUI')
     servico = build('books', 'v1', developerKey=books_api_key)

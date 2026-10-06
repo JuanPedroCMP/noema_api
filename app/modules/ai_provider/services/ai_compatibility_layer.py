@@ -56,7 +56,7 @@ class AiProvider:
         
         return preference_order     
     
-    def call_ai(self, user_prompt: str, agent_id: UUID) -> str:     
+    async def call_ai(self, user_prompt: str, agent_id: UUID) -> str:  
         preference_order = self._calculate_preference_order(agent_id=agent_id)
         preference_order.sort(key=lambda x: x[1], reverse=True)
         agent = get_agent(str(agent_id), self.db)
@@ -119,6 +119,8 @@ class AiProvider:
                         datamodel = CreateFeynmanResponse
                     case "evaluate_feynman":
                         datamodel = EvaluateFeynmanResponse
+                    case "create_flashcard":
+                        datamodel = CreateFlashcard
                     case "study_manager":
                         datamodel = StudyManagerResponse
                     case "study_assistent":
@@ -133,7 +135,7 @@ class AiProvider:
                 print(1)
                 chain = (prompt | model_struc)
                 print(2)
-                resultado =  chain.invoke({"user_prompt": user_prompt})
+                resultado = await chain.ainvoke({"user_prompt": user_prompt})
                 print(3)
                 raw: dict = resultado["raw"]
                 parsed_result: ManipulateGraphResponse = resultado["parsed"]
@@ -193,7 +195,7 @@ class AiProvider:
                             
                             print(11)
                             chain2 = (prompt | model_struc)
-                            resultado2 =  chain2.invoke({"user_prompt": failed_generation})
+                            resultado2 = await chain2.ainvoke({"user_prompt": failed_generation})
                             print(22)
                             raw2: dict = resultado2["raw"]
                             parsed2: ManipulateGraphResponse = resultado2["parsed"]
