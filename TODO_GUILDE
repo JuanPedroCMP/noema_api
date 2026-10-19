@@ -1,0 +1,17 @@
+
+1. Core Task Management
+
+• TODO: The standard placeholder for future work, missing features, or planned optimizations.
+• FIXME: Urgent issues that require immediate attention. It signifies that the code is currently broken, buggy, or failing and needs a developer to fix it.
+• HACK: A temporary workaround. It alerts the team that the code is sub-optimal or "ugly" (often written quickly to meet a deadline) and should eventually be refactored properly.
+
+2. Bugs & Security
+
+• BUG: An active, known bug that has been identified in the code but hasn't been fixed yet.
+• SECURITY: Vulnerabilities or security risks. This flags code that requires extra auditing, encryption updates, or compliance checks.
+
+3. Documentation & Code Health
+
+• UNDONE: A reversal or rollback of a previous feature. It notes that a change was reverted and needs to be handled properly.
+• XXX: A warning flag. It warns other developers to look closely at a piece of code because something is tricky, unusual, or potentially problematic.
+• NOTE / INFO: Important context. Unlike other tags, this isn't an action item; it simply highlights vital architectural or procedural information that another developer must read.

@@ -7,7 +7,7 @@ from ...ai.services import list_agent_models, get_ai_model, get_agent, get_provi
 from ....core.db_models.ai_models import AgentModel, AiModel, UserApiKey, UserApiKeyCanUseIaModel
 from ...ai.models import AgentModelFilters
 from sqlalchemy.orm import Session
-from ..models import EvaluateEssayQuestionResponse, ManipulateGraphResponse, SearchQueries
+from ..models import CreateStudySessionResponse, EvaluateEssayQuestionResponse, ManipulateGraphResponse, ManipulateNodeResponse, SearchQueries
 from uuid import UUID
 from ...ai.services import create_ai_usage_log
 from ...ai.models import AiUsageLogCreate, UserApiKeyCanUseIaModelFilters
@@ -24,7 +24,7 @@ from .jsonServices import JsonHelper
 from app.core.security import decrypt
 
 ### Fazer duas chamadas: uma para criar os nodes e outra para as relações, para evitar erros em grafos grandes. Tambpem arrumar outras formas de economizar tokens
-
+##  HACK: Rewrite this code in a cleaner way
 class AiProvider:
     def __init__(self, db: Session, user_token: str):
         self.db = db

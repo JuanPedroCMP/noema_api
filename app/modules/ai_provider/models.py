@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import BaseModel, Json, Field
 from uuid import UUID
 from enum import Enum
@@ -67,6 +69,37 @@ class TextCoerence:
     argument_struct: int = Field(me=0, le=100)
     argument_clarity: int = Field(me=0, le=100)
     
+###################
+### ManipulateNodeResponse
+###################
+class ManipulateNodeResponse(BaseModel):
+    changed_nodes: list[GraphNodeEdit]
+    changed_edges: list[GraphEdgeEdit]
+    
+class GraphNodeEdit(BaseModel):
+    node_id: Optional[int | None] = None
+    title: Optional[str | None] = None
+  # description:str
+    type: GraphType
+class GraphEdgeEdit(BaseModel):
+    source_node: Optional[int | None] = None
+    target_node: Optional[int | None] = None
+    type: Optional[EdgeType | None] = None
+
+###################
+### CreateStudySessionResponse
+###################
+class CreateStudySessionResponse(BaseModel):
+    alternative_questions_ids: Optional[list[int] | None] = None
+    dissertative_questions_ids: Optional[list[int] | None] = None
+    target: str
+
+class CreateEssayQuestionResponse(BaseModel):
+    
+
+
+
+
 
 ###################
 ### External resources query generation
@@ -334,3 +367,4 @@ class TavilyImage(BaseModel):
 
 class TavilyUsage(BaseModel):
     credits: int
+    
