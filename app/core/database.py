@@ -35,8 +35,8 @@ def _get_int(name: str, default: int, minimum: int = 1) -> int:
 # needs the database, while allowing short bursts above the steady-state pool.
 engine = create_engine(
     DATABASE_URL,
-    pool_size=_get_int("DB_POOL_SIZE", 10),
-    max_overflow=_get_int("DB_MAX_OVERFLOW", 20, minimum=0),
+    pool_size=_get_int("DB_POOL_SIZE", 15),
+    max_overflow=_get_int("DB_MAX_OVERFLOW", 15, minimum=0),
     pool_timeout=_get_int("DB_POOL_TIMEOUT", 30),
     pool_pre_ping=True,
 )

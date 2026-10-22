@@ -24,6 +24,7 @@ from ...ai.services import (
 )
 from ..models import (
     CreateEssayQuestionResponse,
+    CreateMultipleChoiceQuestionResponse,
     CreateStudySessionResponse,
     EvaluateEssayQuestionResponse,
     EvaluateFeynmanResponse,
@@ -52,7 +53,7 @@ TASK_RESPONSE_MODELS: dict[str, Any] = {
     "create_study_session": CreateStudySessionResponse,
     "evaluate_essay_question": EvaluateEssayQuestionResponse,
     "create_essay_question": CreateEssayQuestionResponse,
-    "create_multiple_choice_question": "CreateMultipleChoiceQuestionResponse",
+    "create_multiple_choice_question": CreateMultipleChoiceQuestionResponse,
     "evaluate_multiple_choice_question": "EvaluateMultipleChoiceQuestionResponse",
     "create_feynman": "CreateFeynmanResponse",
     "evaluate_feynman": EvaluateFeynmanResponse,

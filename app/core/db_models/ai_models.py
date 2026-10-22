@@ -33,8 +33,10 @@ class TaskType(str, enum.Enum):
     RECOMMEND_STUDY_RESOURCE = 'recommend_study_resource'
     STUDY_MANAGER = 'study_manager'
     STUDY_ASSISTENT = 'study_assistent'
-
-
+    CREATE_FLASHCARD_GROUP = 'create_flashcard_group'
+    MANIPULATE_FLASHCARD_GROUP = 'manipulate_flashcard_group'
+    CREATE_FLASHCARD = 'create_flashcard'
+    CREATE_FLASHCARDS = 'create_flashcardS'
 class Agent(Base):
     __tablename__ = 'agent'
     __table_args__ = (

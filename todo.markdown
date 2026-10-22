@@ -9,9 +9,9 @@
 - [ ]
 - [ ]
 ## IMPROVE:
-- [ ] Search system
-  - [ ] YT
-  - [ ] Books
-  - [ ] Papers
-  - [ ] Web
-- [ ]
+- [x] Search system
+  - [x] YT
+  - [x] Books
+  - [x] Papers
+  - [x] Web
+- [x] make all async

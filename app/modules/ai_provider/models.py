@@ -31,7 +31,7 @@ class ManipulateGraphResponse(BaseModel):
 class GraphNode(BaseModel):
     node_id: int
     title: str
-  # description:str
+    description:str
     type: GraphType
 class GraphEdge(BaseModel):
     source_node: int
@@ -101,6 +101,27 @@ class CreateEssayQuestionResponse(BaseModel):
     title: str
     statement: str
     reference_correct_answer: str
+    
+###################
+### CreateMultipleChoiceQuestionResponse
+###################
+class CreateMultipleChoiceQuestionResponse(BaseModel):
+    title: str
+    statement: str
+    choises: list[Choise]
+
+class Choise(BaseModel):
+    is_correct: bool
+    statement: str
+    explanation: str
+    weigth: int
+
+###################
+### EvaluateMultipleChoiceQuestionResponse
+###################
+class EvaluateMultipleChoiceQuestionResponse(BaseModel):
+    explanation: str
+    tips: str
 
 ###################
 ### External resources query generation
