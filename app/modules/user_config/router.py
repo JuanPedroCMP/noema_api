@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from ...core.security import oauth2_scheme
 from ...core.database import get_db
-from .services import get_user_global_config as gugc, create_user_global_config as cugc, update_user_global_config as uugc, get_language as gl, list_language as ll, create_language as cl, update_language as ul, delete_response_language_preference_order as drlpo, get_response_language_preference_order as grlpo, list_response_language_preference_orders as lrlpo, create_response_language_preference_order as crlpo, update_response_language_preference_order as urlpo, update_user_local_config as uulc, get_user_local_config as gulc, create_user_local_config as culc
+from .services import get_user_global_config as gugc, create_user_global_config as cugc, update_user_global_config as uugc, get_language as gl, list_language as ll, create_language as cl, update_language as ul, delete_response_language_preference_order as drlpo, get_response_language_preference_order as grlpo, list_response_language_preference_orders as lrlpo, list_user_global_configs as list_user_local_configs, create_response_language_preference_order as crlpo, update_response_language_preference_order as urlpo, update_user_local_config as uulc, get_user_local_config as gulc, create_user_local_config as culc
 from .models import UserGlobalConfigCreate, UserGlobalConfigOut, UserGlobalConfigUpdate, UserLocalConfigCreate, UserLocalConfigOut, UserLocalConfigUpdate, LanguageUpdate, LanguageFilters, LanguageCreate, LanguageOut, ResponseLanguagePreferenceOrderOut, ResponseLanguagePreferenceOrderUpdate, ResponseLanguagePreferenceOrderCreate, UserLocalConfigFilters
 from typing import Annotated
 
@@ -47,7 +47,7 @@ def get_user_local_config(identificator: str, db: Session = Depends(get_db), tok
 @router_user_local_config.get("/list", response_model=list[UserLocalConfigOut])
 def list_user_local_configs(filters: Annotated[UserLocalConfigFilters, Query()], db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):  
     _filters = filters.model_dump(exclude_unset=True, exclude_none=True, exclude_defaults=True)
-    return lrlpo(token, db, _filters,)
+    return list_user_global_configs(token, db, _filters)
 
 @router_user_local_config.post("/create", response_model=UserLocalConfigOut)
 def create_user_local_config(new_user_user_local_config: UserLocalConfigCreate, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):

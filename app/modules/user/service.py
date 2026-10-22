@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from rich import status
+from fastapi import status
 from .service import *
 from ...core.database import get_db
 from sqlalchemy.orm import Session
@@ -65,5 +65,4 @@ def del_user(token: str, db: Session) -> bool:
    db.delete(user)
    db.commit()
    return True
-
 

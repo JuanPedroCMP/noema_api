@@ -1,6 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from app.modules.ai_provider.models import ExternalResourcesOut, GbBook, S2SearchResult, SearchQueries, TavilyResponse, YtSearchResult
-from app.modules.ai_provider.services.services import getBooks, getPapers, getSearchResuls, getVideos
+from app.modules.ai_provider.services.services import (
+    get_books,
+    get_papers,
+    get_search_results,
+    get_videos,
+)
 from .services.ai_compatibility_layer import AiProvider
 from sqlalchemy.orm import Session
 from ...core.database import get_db
@@ -12,6 +20,7 @@ router = APIRouter(
     prefix="/ai_router",
     tags=["ai_router"]
 )
+logger = logging.getLogger(__name__)
 
 @router.post("/use_ai")
 async def use_ai(user_prompt: str, agent_id: UUID, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -20,7 +29,16 @@ async def use_ai(user_prompt: str, agent_id: UUID, token: str = Depends(oauth2_s
     return result
 
 @router.post("/get_materials")
-async def get_materials(user_prompt: str, agent_id: UUID, get_videos : bool = True, get_books : bool = True, get_papers : bool = True, get_web : bool = True,token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+async def get_materials(
+    user_prompt: str,
+    agent_id: UUID,
+    include_videos: bool = Query(True, alias="get_videos"),
+    include_books: bool = Query(True, alias="get_books"),
+    include_papers: bool = Query(True, alias="get_papers"),
+    include_web: bool = Query(True, alias="get_web"),
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
     ai_provider = AiProvider(db=db, user_token=token)
     result : SearchQueries = await ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt) ## Gerar o pronpt para cada pesquisa TODO: Fazer modelo pydantic para gerar os dados
     # ## Pega o pronpt e faz cada pesquisa
@@ -53,44 +71,30 @@ async def get_materials(user_prompt: str, agent_id: UUID, get_videos : bool = Tr
     # final_result: ExternalResourcesOut = ExternalResourcesOut(books=books, papers=papers, search_results=research, yt_videos=videos)
     # print(type(final_result))
     # print(final_result)
-    papers = []
-    if get_papers:
+    async def run_search(search_name: str, search_operation):
         try:
-            papers = await getPapers(result.paper_query)
-        except Exception as err:
-            papers = []
-            print(err)
-      
-    videos = []      
-    if get_videos:      
-        try:
-            videos = await getVideos(result.yt_videos_query)
-        except Exception as err:
-            videos = []
-            print(err)
-    
-    books = []        
-    if get_books:        
-        try:
-            books = await getBooks(result.books_query)
-        except Exception as err:
-            books = []
-            print(err)
-    
-    research = []
-    if get_web:    
-        try:
-            research = await getSearchResuls(result.search_query)
-        except Exception as err:   
-            research = []
-            print(err)
-            
+            return await search_operation
+        except Exception:
+            logger.warning("%s search failed.", search_name, exc_info=True)
+            return []
 
+    search_tasks = [
+        run_search("paper", get_papers(result.paper_query))
+        if include_papers
+        else asyncio.sleep(0, result=[]),
+        run_search("video", get_videos(result.yt_videos_query))
+        if include_videos
+        else asyncio.sleep(0, result=[]),
+        run_search("book", get_books(result.books_query))
+        if include_books
+        else asyncio.sleep(0, result=[]),
+        run_search("web", get_search_results(result.search_query))
+        if include_web
+        else asyncio.sleep(0, result=[]),
+    ]
+    papers, videos, books, research = await asyncio.gather(*search_tasks)
     final_result = (papers or [], videos or [], books or [], research or [])
 
-    
-    print(final_result)
-    print(type(final_result))
     ## A IA filtra os resultados relevantes (retorna os id's)
     ## Coloca todos os resultados num modelo pydantic 
     return final_result
@@ -99,25 +103,17 @@ async def get_materials(user_prompt: str, agent_id: UUID, get_videos : bool = Tr
 
 ### TESTES
 @router.post("/get_papers")
-def use1_ai(query: str, token: str = Depends(oauth2_scheme)):
-    result = getPapers(query=query)
-    print(type(result))
-    return result 
+async def use1_ai(query: str, token: str = Depends(oauth2_scheme)):
+    return await get_papers(query=query)
 
 @router.post("/get_yt")
-def use2_ai(query: str, token: str = Depends(oauth2_scheme)):
-    result = getVideos(termo_busca=query)
-    print(type(result))
-    return result 
+async def use2_ai(query: str, token: str = Depends(oauth2_scheme)):
+    return await get_videos(query=query)
 
 @router.post("/get_books")
-def use3_ai(query: str, token: str = Depends(oauth2_scheme)):
-    result = getBooks(termo_busca=query)
-    print(type(result))
-    return result 
+async def use3_ai(query: str, token: str = Depends(oauth2_scheme)):
+    return await get_books(query=query)
 
 @router.post("/get_pesquisa")
-def use4_ai(query: str, token: str = Depends(oauth2_scheme)): 
-    result =  getSearchResuls(query=query)
-    print(type(result))
-    return result 
+async def use4_ai(query: str, token: str = Depends(oauth2_scheme)):
+    return await get_search_results(query=query)

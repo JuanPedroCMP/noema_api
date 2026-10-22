@@ -1,83 +1,135 @@
+"""Clients for external academic, web, video, and book search providers."""
+
+import asyncio
 import os
+from pathlib import Path
+from typing import Any, Callable, Coroutine, TypeVar
+
 from dotenv import load_dotenv
-from semanticscholar import SemanticScholar
-from googleapiclient.discovery import build
-from tavily import TavilyClient
 
-load_dotenv(dotenv_path='app/config/.env.api_utils')
-
-ss_api_key = os.getenv("SS_API")
-yt_api_key = os.getenv("YT_API")
-books_api_key = os.getenv("BOOKS_API")
-tavily_api_key = os.getenv("TAVILY_API")
-
-ss = SemanticScholar(api_key=ss_api_key)
-clientTavily = TavilyClient(tavily_api_key)
-
-async def getPapers(query: str):
-    result = ss.search_paper(query=query)
-    print(result.raw_data)   
-    return result.raw_data
+_T = TypeVar("_T")
+_CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / ".env.api_utils"
+load_dotenv(dotenv_path=_CONFIG_PATH)
 
 
-async def getVideos(termo_busca: str, max_resultados: int = 10):
-    # Constrói o serviço da API do YouTube
-    youtube = build("youtube", "v3", developerKey=yt_api_key)
-    
-    # Executa a busca
-    requisicao = youtube.search().list(
-        part="snippet",
-        q=termo_busca,
-        type="video",
-        maxResults=max_resultados
-    )
-    resposta = requisicao.execute()
-    
-    # Processa os resultados
-    for item in resposta.get("items", []):
-        titulo = item["snippet"]["title"]
-        video_id = item["id"]["videoId"]
-        canal = item["snippet"]["channelTitle"]
-        
-        print(resposta)
+def _required_setting(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(
+            f"{name} is not configured. Add it to {_CONFIG_PATH.name}."
+        )
+    return value
 
-        print(f"Título: {titulo}")
-        print(f"Canal: {canal}")
-        print(f"Link: https://youtube.com/watch?v={video_id}")
-        print("-" * 40)
-    return resposta.get("items", [])
- 
-async def getSearchResuls(query: str):
-    # To install: pip install tavily-python  
-    response = clientTavily.search(
-        query=query,
-        search_depth="advanced",
-        max_results=15,
-        include_usage=True
-    )
-    print(response)
-    return response
 
-async def getBooks(termo_busca: str):  
-    # Inicializa o serviço para a API 'books' na versão 'v1'
-    # Se tiver uma chave, use: build('books', 'v1', developerKey='SUA_CHAVE_AQUI')
-    servico = build('books', 'v1', developerKey=books_api_key)
-    
-    # Cria a requisição de busca
-    requisicao = servico.volumes().list(q=termo_busca, maxResults=15)
-    
-    # Executa a requisição e armazena a resposta
-    resposta = requisicao.execute()
-    
-    print(f"Total de itens encontrados: {resposta.get('totalItems', 0)}\n")
-    
-    # Processa os resultados
-    for item in resposta.get('items', []):
-        info = item.get('volumeInfo', {})
-        titulo = info.get('title', 'Título não informado')
-        autores = ", ".join(info.get('authors', ['Autor desconhecido']))
-        
-        print(f"Título: {titulo}")
-        print(f"Autor(es): {autores}")
-        print("-" * 40)
-    return resposta.get("items", [])
+def _run_blocking(operation: Callable[[], _T]) -> Coroutine[Any, Any, _T]:
+    return asyncio.to_thread(operation)
+
+
+async def get_papers(query: str) -> dict[str, Any]:
+    """Search Semantic Scholar and return its raw response data."""
+    if not query.strip():
+        raise ValueError("The paper search query cannot be empty.")
+
+    api_key = _required_setting("SS_API")
+
+    def search() -> dict[str, Any]:
+        try:
+            from semanticscholar import SemanticScholar
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "Semantic Scholar support is unavailable. Install semanticscholar."
+            ) from exc
+
+        client = SemanticScholar(api_key=api_key)
+        result = client.search_paper(query=query.strip())
+        return result.raw_data
+
+    return await _run_blocking(search)
+
+
+async def get_videos(query: str, max_results: int = 10) -> list[dict[str, Any]]:
+    """Search YouTube videos matching a query."""
+    if not query.strip():
+        raise ValueError("The video search query cannot be empty.")
+    if not 1 <= max_results <= 50:
+        raise ValueError("max_results must be between 1 and 50.")
+
+    api_key = _required_setting("YT_API")
+
+    def search() -> list[dict[str, Any]]:
+        try:
+            from googleapiclient.discovery import build
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "YouTube support is unavailable. Install google-api-python-client."
+            ) from exc
+
+        youtube = build("youtube", "v3", developerKey=api_key)
+        response = (
+            youtube.search()
+            .list(
+                part="snippet",
+                q=query.strip(),
+                type="video",
+                maxResults=max_results,
+            )
+            .execute()
+        )
+        return response.get("items", [])
+
+    return await _run_blocking(search)
+
+
+async def get_search_results(query: str) -> dict[str, Any]:
+    """Search the web with Tavily."""
+    if not query.strip():
+        raise ValueError("The web search query cannot be empty.")
+
+    api_key = _required_setting("TAVILY_API_KEY")
+
+    def search() -> dict[str, Any]:
+        try:
+            from tavily import TavilyClient
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "Tavily support is unavailable. Install tavily-python."
+            ) from exc
+
+        client = TavilyClient(api_key)
+        return client.search(
+            query=query.strip(),
+            search_depth="advanced",
+            max_results=15,
+            include_usage=True,
+        )
+
+    return await _run_blocking(search)
+
+
+async def get_books(query: str) -> list[dict[str, Any]]:
+    """Search Google Books volumes matching a query."""
+    if not query.strip():
+        raise ValueError("The book search query cannot be empty.")
+
+    api_key = _required_setting("BOOKS_API")
+
+    def search() -> list[dict[str, Any]]:
+        try:
+            from googleapiclient.discovery import build
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "Google Books support is unavailable. Install google-api-python-client."
+            ) from exc
+
+        books = build("books", "v1", developerKey=api_key)
+        response = books.volumes().list(q=query.strip(), maxResults=15).execute()
+        return response.get("items", [])
+
+    return await _run_blocking(search)
+
+
+# Backward-compatible aliases for existing route imports.
+getPapers = get_papers
+getVideos = get_videos
+getSearchResuls = get_search_results
+getBooks = get_books
