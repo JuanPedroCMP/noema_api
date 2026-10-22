@@ -95,6 +95,9 @@ class CreateStudySessionResponse(BaseModel):
     target: str
 
 class CreateEssayQuestionResponse(BaseModel):
+    title: str
+    statement: str
+    correct_answer_reference: str
     
 
 
