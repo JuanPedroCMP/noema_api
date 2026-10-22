@@ -36,16 +36,16 @@ def confirm_pwd_reset(identificator: str, new_password: str, code: str, db: Sess
 ################
 @router.get("/google/get/{identificator}", response_model=GoogleAccountOut)
 def get_google_account(identificator: str, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
-    return gga(identificator, db)
+    return gga(token, identificator, db)
 
 @router.post("/google/create", response_model=GoogleAccountOut)
 def create_google_account(new_google_account: GoogleAccountCreate, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
-    google_account = cga(new_google_account, db)
+    google_account = cga(token, new_google_account, db)
     return google_account
 
 @router.put("/google/update/{identificator}", response_model=GoogleAccountOut)
 def update_google_account(identificator: str, google_account_data: GoogleAccountUpdate, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
-    upd_data = uga(identificator, google_account_data, db)
+    upd_data = uga(token, identificator, google_account_data, db)
     return upd_data
 
 @router.delete("/google/delete/{identificator}")

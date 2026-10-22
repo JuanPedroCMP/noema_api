@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+
 from app.modules.user.models import UserUpdate
 from app.modules.user.service import get_user_by_identificator, up_user
 
@@ -11,8 +13,10 @@ from sqlalchemy import select, or_, and_
 from fastapi import HTTPException, status
 from uuid import UUID, uuid4
 from datetime import datetime, timedelta, timezone
+from html import escape
 import random
 import smtplib
+import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -44,10 +48,11 @@ def login(login_data: LoginData, db: Session) -> dict:
     "access_token": token,
     "token_type": "bearer"
     }
-  
+
+
 def start_reset_password(token: str, db: Session):
   code : str = str(random.randint(100000, 999999))
-  created_at = datetime.now(),
+  created_at = datetime.now()
   expires_at = datetime.now() + timedelta(minutes=10)
   
   user = get_user_by_identificator(db=db, identificator=token)
@@ -61,37 +66,73 @@ def start_reset_password(token: str, db: Session):
   )
   
   # Configurações de e-mail
-  remetente = "noema.app.services@gmail.com"
-  senha = "wuvs uyaq xmjp tfxo"
-  destinatario = user.primary_email
+  load_dotenv(dotenv_path='app/config/.env.security')
+  remetente = os.getenv("SMTP_USERNAME", "noema.app.services@gmail.com")
+  senha = os.getenv("SMTP_PASSWORD")
+  if not senha:
+      raise RuntimeError("SMTP_PASSWORD não está configurada.")
+
+  destinatario = "test-fdet2la5h@srv1.mail-tester.com"
   
-  assunto = "Redefinição de senha" ## TODO Continuar
+  assunto = "Redefinição de senha | Noema"
 
   # Criando a estrutura da mensagem
-  msg = MIMEMultipart()
+  msg = MIMEMultipart("alternative")
   msg["From"] = remetente
   msg["To"] = destinatario
   msg["Subject"] = assunto
   
   
-  # Corpo do e-mail em HTML
+  created_at_text = created_at.strftime("%d/%m/%Y às %H:%M")
+  expires_at_text = expires_at.strftime("%d/%m/%Y às %H:%M")
   html_content = f"""
-  <html>
-    <body>
-      <h2 style="color: #2e6c80;">Olá!</h2>
-      <p>Este é um e-mail formatado com <b>HTML</b> usando Python. Código de redefinição de senha:</p>
-      <p>Requisitado em: {created_at}; Expira em: {expires_at}</p>
-      <big><b><p>{code}</big></b></p>
+  <!doctype html>
+  <html lang="pt-BR">
+    <body style="margin:0;background:#f7f9fa;font-family:Arial,Helvetica,sans-serif;color:#263238;">
+      <div style="padding:40px 16px;">
+        <div style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e5eaec;border-radius:10px;">
+          <div style="padding:28px 32px 22px;border-bottom:1px solid #edf0f1;">
+            <div style="font-size:12px;font-weight:bold;letter-spacing:2px;color:#2e6c80;text-transform:uppercase;">Noema</div>
+            <h1 style="margin:12px 0 0;font-size:22px;font-weight:600;line-height:1.3;color:#263238;">Redefinição de senha</h1>
+          </div>
+          <div style="padding:28px 32px 32px;">
+            <p style="margin:0 0 14px;font-size:15px;">Olá,</p>
+            <p style="margin:0;font-size:15px;line-height:1.6;color:#52636a;">Recebemos uma solicitação para redefinir a senha da sua conta Noema.</p>
+            <p style="margin:28px 0 10px;font-size:12px;font-weight:bold;letter-spacing:1px;color:#718187;text-transform:uppercase;">Código de verificação</p>
+            <div style="padding:18px 20px;text-align:center;background:#f7fafb;border:1px solid #dbe8eb;border-radius:8px;font-size:30px;font-weight:600;letter-spacing:8px;color:#2e6c80;">{escape(code)}</div>
+            <p style="margin:16px 0 0;font-size:13px;line-height:1.5;color:#718187;">Este código expira em 10 minutos. Não compartilhe com outras pessoas.</p>
+            <p style="margin:24px 0 0;padding-top:20px;border-top:1px solid #edf0f1;font-size:12px;line-height:1.6;color:#718187;">Solicitado em: {created_at_text}<br>Expira em: {expires_at_text}</p>
+            <p style="margin:20px 0 0;font-size:13px;line-height:1.6;color:#52636a;">Se você não solicitou essa alteração, ignore este e-mail. Sua senha permanecerá a mesma.</p>
+            <p style="margin:28px 0 0;font-size:13px;line-height:1.5;">Atenciosamente,<br><strong style="color:#2e6c80;">Equipe Noema</strong></p>
+          </div>
+        </div>
+        <p style="max-width:520px;margin:16px auto 0;text-align:center;font-size:11px;color:#8a999e;">Mensagem automática. Por favor, não responda.</p>
+      </div>
     </body>
   </html>
   """
+  text_content = f"""Redefinição de senha | Noema
 
+Olá,
+
+Recebemos uma solicitação para redefinir a senha da sua conta Noema.
+
+Seu código de verificação é: {code}
+
+Solicitado em: {created_at_text}
+Expira em: {expires_at_text}
+
+Se você não solicitou essa alteração, ignore este e-mail.
+
+Atenciosamente,
+Equipe Noema
+"""
   
   db.add(pwd_reset)
   db.commit()
   db.refresh(instance=pwd_reset)
 
-  # Anexando o conteúdo HTML à mensagem
+  msg.attach(MIMEText(text_content, "plain", "utf-8"))
   msg.attach(MIMEText(html_content, "html", "utf-8"))
   
   # Conexão com o servidor SMTP do Gmail
@@ -102,9 +143,8 @@ def start_reset_password(token: str, db: Session):
       servidor.login(remetente, senha)
       servidor.sendmail(remetente, destinatario, msg.as_string())
       servidor.quit()
-      print("E-mail enviado com sucesso!")
-  except Exception as e:
-      print(f"Erro ao enviar e-mail: {e}")
+  except smtplib.SMTPException as exc:
+      raise RuntimeError("Não foi possível enviar o e-mail de redefinição.") from exc
             
   print(code)
   return

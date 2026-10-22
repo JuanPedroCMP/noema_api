@@ -94,12 +94,13 @@ class CreateStudySessionResponse(BaseModel):
     dissertative_questions_ids: Optional[list[int] | None] = None
     target: str
 
+###################
+### CreateEssayQuestionResponse
+###################
 class CreateEssayQuestionResponse(BaseModel):
-    
-
-
-
-
+    title: str
+    statement: str
+    reference_correct_answer: str
 
 ###################
 ### External resources query generation
