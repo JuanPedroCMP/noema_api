@@ -20,11 +20,11 @@ def get_device(token: str, identificator : str, db: Session):
         
     user = get_current_user(token, db)
 
-    if device.id_user != user.id:
-        raise HTTPException(401, "Não autorizado")   
-        
     if device is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="color theme não encontrado")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    if device.id_user != user.id:
+        raise HTTPException(401, "Não autorizado")
         
     return device
 

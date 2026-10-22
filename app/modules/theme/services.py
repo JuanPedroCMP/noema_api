@@ -23,11 +23,11 @@ def get_user_color_theme(token: str, identificator : str, db: Session):
         
     user = get_current_user(token, db)
 
-    if color_theme.id_user != user.id:
-        raise HTTPException(401, "Não autorizado")   
-        
     if color_theme is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="color theme não encontrado")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Color theme not found")
+
+    if color_theme.id_user != user.id:
+        raise HTTPException(401, "Não autorizado")
         
     return color_theme
 
@@ -111,11 +111,11 @@ def get_user_typography_theme(identificator : str, db: Session, token: str):
     
     user = get_current_user(token, db)
     
+    if typography_theme is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Typography theme not found")
+
     if typography_theme.id_user != user.id:
         raise HTTPException(401, "Não autorizado")
-        
-    if typography_theme is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="color theme não encontrado")
         
     return typography_theme
 

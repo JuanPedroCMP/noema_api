@@ -1,3 +1,6 @@
+import asyncio
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from app.modules.ai_provider.models import ExternalResourcesOut, GbBook, S2SearchResult, SearchQueries, TavilyResponse, YtSearchResult
 from app.modules.ai_provider.services.services import (
@@ -17,6 +20,7 @@ router = APIRouter(
     prefix="/ai_router",
     tags=["ai_router"]
 )
+logger = logging.getLogger(__name__)
 
 @router.post("/use_ai")
 async def use_ai(user_prompt: str, agent_id: UUID, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -67,44 +71,30 @@ async def get_materials(
     # final_result: ExternalResourcesOut = ExternalResourcesOut(books=books, papers=papers, search_results=research, yt_videos=videos)
     # print(type(final_result))
     # print(final_result)
-    papers = []
-    if include_papers:
+    async def run_search(search_name: str, search_operation):
         try:
-            papers = await get_papers(result.paper_query)
-        except Exception as err:
-            papers = []
-            print(err)
-      
-    videos = []      
-    if include_videos:
-        try:
-            videos = await get_videos(result.yt_videos_query)
-        except Exception as err:
-            videos = []
-            print(err)
-    
-    books = []        
-    if include_books:
-        try:
-            books = await get_books(result.books_query)
-        except Exception as err:
-            books = []
-            print(err)
-    
-    research = []
-    if include_web:
-        try:
-            research = await get_search_results(result.search_query)
-        except Exception as err:   
-            research = []
-            print(err)
-            
+            return await search_operation
+        except Exception:
+            logger.warning("%s search failed.", search_name, exc_info=True)
+            return []
 
+    search_tasks = [
+        run_search("paper", get_papers(result.paper_query))
+        if include_papers
+        else asyncio.sleep(0, result=[]),
+        run_search("video", get_videos(result.yt_videos_query))
+        if include_videos
+        else asyncio.sleep(0, result=[]),
+        run_search("book", get_books(result.books_query))
+        if include_books
+        else asyncio.sleep(0, result=[]),
+        run_search("web", get_search_results(result.search_query))
+        if include_web
+        else asyncio.sleep(0, result=[]),
+    ]
+    papers, videos, books, research = await asyncio.gather(*search_tasks)
     final_result = (papers or [], videos or [], books or [], research or [])
 
-    
-    print(final_result)
-    print(type(final_result))
     ## A IA filtra os resultados relevantes (retorna os id's)
     ## Coloca todos os resultados num modelo pydantic 
     return final_result

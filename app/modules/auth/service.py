@@ -72,7 +72,7 @@ def start_reset_password(token: str, db: Session):
   if not senha:
       raise RuntimeError("SMTP_PASSWORD não está configurada.")
 
-  destinatario = "test-fdet2la5h@srv1.mail-tester.com"
+  destinatario = user.primary_email
   
   assunto = "Redefinição de senha | Noema"
 
@@ -204,11 +204,14 @@ def get_google_account(token: str, identificator : str, db: Session):
         
     user = get_current_user(token, db)
 
-    if google_account.id_user != user.id:
-        raise HTTPException(401, "Não autorizado")   
-        
     if google_account is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="color theme não encontrado")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Google account not found",
+        )
+
+    if google_account.id_user != user.id:
+        raise HTTPException(401, "Não autorizado")
         
     return google_account
 

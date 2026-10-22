@@ -22,11 +22,11 @@ def get_user_global_config(token: str, identificator : str, db: Session):
     
     user = get_current_user(token, db)
 
-    if user_global_config.id_user != user.id:
-        raise HTTPException(401, "Não autorizado")   
-        
     if user_global_config is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config não encontrada")
+
+    if user_global_config.id_user != user.id:
+        raise HTTPException(401, "Não autorizado")
         
     return user_global_config
 
@@ -73,11 +73,11 @@ def get_user_local_config(token: str, identificator : str, db: Session):
         
     user = get_current_user(token, db)
 
-    if user_local_config.id_user != user.id:
-        raise HTTPException(401, "Não autorizado")   
-        
     if user_local_config is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config Local não encontrada")
+
+    if user_local_config.id_user != user.id:
+        raise HTTPException(401, "Não autorizado")
         
     return user_local_config
 
