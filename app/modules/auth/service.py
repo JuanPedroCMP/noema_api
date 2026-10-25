@@ -1,20 +1,18 @@
 from dotenv import load_dotenv
 
 from app.modules.user.models import UserUpdate
-from app.modules.user.service import get_user_by_identificator, up_user
+from app.modules.user.service import get_user_by_identificator
 
-from ...core.security import create_access_token, hash_password, verify_password, get_current_user, decrypt, encrypt
-from ...core.database import get_db
+from ...core.security import create_access_token, hash_password, verify_password, get_current_user, encrypt
 from sqlalchemy.orm import Session
 from ...core.db_models.app_auth_models import PasswordResetToken, User, GoogleAccount
-from authlib.integrations.starlette_client import OAuth
 from .models import LoginData, GoogleAccountCreate, GoogleAccountUpdate
 from sqlalchemy import select, or_, and_
 from fastapi import HTTPException, status
 from uuid import UUID, uuid4
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from html import escape
-import random
+import secrets
 import smtplib
 import os
 from email.mime.multipart import MIMEMultipart
@@ -51,7 +49,7 @@ def login(login_data: LoginData, db: Session) -> dict:
 
 
 def start_reset_password(token: str, db: Session):
-  code : str = str(random.randint(100000, 999999))
+  code: str = f"{secrets.randbelow(1_000_000):06d}"
   created_at = datetime.now()
   expires_at = datetime.now() + timedelta(minutes=10)
   
@@ -138,16 +136,15 @@ Equipe Noema
   # Conexão com o servidor SMTP do Gmail
   try:
       # Usando a porta 587 com TLS
-      servidor = smtplib.SMTP("smtp.gmail.com", 587)
-      servidor.starttls()
-      servidor.login(remetente, senha)
-      servidor.sendmail(remetente, destinatario, msg.as_string())
-      servidor.quit()
+      with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as servidor:
+          servidor.starttls()
+          servidor.login(remetente, senha)
+          servidor.sendmail(remetente, destinatario, msg.as_string())
   except smtplib.SMTPException as exc:
+      db.rollback()
       raise RuntimeError("Não foi possível enviar o e-mail de redefinição.") from exc
-            
-  print(code)
-  return
+
+  return {"message": "If the account exists, reset instructions were sent."}
 
 def confirm_password_reset(code: str, token: str, db: Session, new_password):
   user = get_user_by_identificator(db=db, identificator=token)
@@ -248,6 +245,8 @@ def update_google_account(token: str, identificator : str, google_account_data: 
         raise HTTPException(401, "Não autorizado")
     
     for k, v in google_account_data.model_dump(exclude_unset=True, exclude_none=True, exclude_defaults=True).items():  
+        if k == "id_user":
+          continue
         if k == "access_token_enc" or k == "refresh_token_enc":
           setattr(google_account, k, encrypt(v))
         else:

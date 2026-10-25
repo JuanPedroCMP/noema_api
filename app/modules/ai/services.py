@@ -1,5 +1,5 @@
-from ...core.db_models.ai_models import AiProvider, AiModel, UserApiKey, Agent, TaskType, AgentModel, UserApiKeyCanUseIaModel, AiUsageLog
-from ...core.security import get_current_user, encrypt, decrypt
+from ...core.db_models.ai_models import AiProvider, AiModel, UserApiKey, Agent, AgentModel, UserApiKeyCanUseIaModel, AiUsageLog
+from ...core.security import get_current_user, encrypt
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_, and_
 from fastapi import HTTPException, status
@@ -11,15 +11,14 @@ from datetime import datetime
 ### Provider
 ################
 def get_provider(identificator : str, db: Session):
-    provider = AiProvider()
-    try:  
-        provider = db.scalar(select(AiProvider).where(
-                AiProvider.id == UUID(identificator),
-        ))
-    except:
-        provider = db.scalar(select(AiProvider).where(
-                AiProvider.slug == identificator
-        ))
+    try:
+        provider = db.scalar(
+            select(AiProvider).where(AiProvider.id == UUID(identificator))
+        )
+    except ValueError:
+        provider = db.scalar(
+            select(AiProvider).where(AiProvider.slug == identificator)
+        )
     if provider is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Provider não encontrado")
         
@@ -27,15 +26,14 @@ def get_provider(identificator : str, db: Session):
 
 def list_providers(db: Session, filters: dict | None) -> list[AiProvider]:
     stmt = select(AiProvider)
-    for k, v in filters.items():
+    for k, v in (filters or {}).items():
+        if not hasattr(AiProvider, k):
+            raise HTTPException(status_code=400, detail=f"Invalid filter: {k}")
         collum_attr = getattr(AiProvider, k)
         stmt = stmt.where(collum_attr == v)
     
     providers = db.scalars(stmt).all()
     
-    if providers is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Provider não encontrado")
-        
     return providers
 
 def create_provider(provider_data: ProviderCreate, db: Session) -> AiProvider:
@@ -74,20 +72,10 @@ def delete_provider(identificator : str, db: Session) -> bool:
 ### AI Model
 ################
 def get_ai_model(identificator : str, db: Session):
-    ai_model = AiModel()
-    try:  
-        ai_model = db.scalar(select(AiModel).where(
-                AiModel.id == UUID(identificator),
-        ))
-    except:
-        try:
-           ai_model = db.scalar(select(AiModel).where(
-                 AiModel.id == identificator,
-            ))
-        except:
-             ai_model = db.scalar(select(AiModel).where(
-                AiModel.slug == identificator
-             ))
+    try:
+        ai_model = db.scalar(select(AiModel).where(AiModel.id == UUID(identificator)))
+    except ValueError:
+        ai_model = db.scalar(select(AiModel).where(AiModel.slug == identificator))
     if ai_model is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Modelo de Ia não encontrado")
         
@@ -95,15 +83,14 @@ def get_ai_model(identificator : str, db: Session):
 
 def list_ai_models(db: Session, filters: dict | None) -> list[AiModel]:
     stmt = select(AiModel)
-    for k, v in filters.items():
+    for k, v in (filters or {}).items():
+        if not hasattr(AiModel, k):
+            raise HTTPException(status_code=400, detail=f"Invalid filter: {k}")
         collum_attr = getattr(AiModel, k)
         stmt = stmt.where(collum_attr == v)
     
     ai_models = db.scalars(stmt).all()
     
-    if ai_models is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Modelo de Ia não encontrado")
-        
     return ai_models
 
 def create_ai_model(ai_model_data: AiModelCreate, db: Session) -> AiModel:
@@ -147,18 +134,15 @@ def delete_ai_model(identificator : str, db: Session) -> bool:
 ################
 
 def get_user_api_key(token: str, identificator: str, db: Session) -> UserApiKey:
-    user_api_key = UserApiKey()
     user = get_current_user(token, db)
     try:
-        user_api_key = db.scalar(select(UserApiKey).where(and_(
-            UserApiKey.id_user == user.id,
-            UserApiKey.id == UUID(identificator)
-        ))) 
-    except:
-        user_api_key = db.scalar(select(UserApiKey).where(and_(
-            UserApiKey.id_user == user.id,
-            UserApiKey.id == identificator
-        ))) 
+        user_api_key = db.scalar(
+            select(UserApiKey).where(
+                and_(UserApiKey.id_user == user.id, UserApiKey.id == UUID(identificator))
+            )
+        )
+    except ValueError:
+        user_api_key = None
         
     if user_api_key is None:
          raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Api Key não encontrada")
@@ -169,7 +153,9 @@ def list_user_api_keys(token: str, filters: dict | None, db: Session) -> list[Us
     user = get_current_user(token, db)
     stmt = select(UserApiKey).where(UserApiKey.id_user == user.id)
     
-    for k, v in filters.items():
+    for k, v in (filters or {}).items():
+        if not hasattr(UserApiKey, k):
+            raise HTTPException(status_code=400, detail=f"Invalid filter: {k}")
         attr = getattr(UserApiKey, k)
         stmt = stmt.where(attr == v)
         
@@ -198,8 +184,10 @@ def update_user_api_key(token: str, identificator: str, upd_data: UserApiKeyUpda
     upd_api_key = get_user_api_key(token, identificator, db)
     
     for k, v in upd_data.model_dump(exclude_defaults=True, exclude_none=True, exclude_unset=True).items():
+        if k == "id_user":
+            continue
         if k == "api_key":
-            setattr(upd_api_key, "encrypted_key", upd_api_key)
+            upd_api_key.encrypted_key = encrypt(v)
         else:
             setattr(upd_api_key, k, v)    
     

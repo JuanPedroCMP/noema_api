@@ -4,16 +4,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 from fastapi import HTTPException, status
 from uuid import UUID, uuid4
-from .models import DeviceCreate, DeviceUpdate, DeviceUpdate, DeviceCreate
+from .models import DeviceCreate, DeviceUpdate
 from datetime import datetime
 
 def get_device(token: str, identificator : str, db: Session):
-    device = Device()
     try:  
         device = db.scalar(select(Device).where(
                 Device.id == UUID(identificator),
         ))
-    except:
+    except ValueError:
         device = db.scalar(select(Device).where(
                 Device.device_fingerprint == identificator
         ))
@@ -34,15 +33,14 @@ def list_devices(token: str, db: Session, filters: dict | None) -> list[Device]:
 
     stmt = stmt.where(Device.id_user == user.id)
     
-    for k, v in filters.items():
+    for k, v in (filters or {}).items():
+        if not hasattr(Device, k):
+            raise HTTPException(status_code=400, detail=f"Invalid filter: {k}")
         collum_attr = getattr(Device, k)
         stmt = stmt.where(collum_attr == v)
     
     devices = db.scalars(stmt).all()
     
-    if devices is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="color theme não encontrado")
-        
     return devices
 
 def create_device(token: str, device_data: DeviceCreate, db: Session) -> Device:

@@ -4,16 +4,31 @@ from dotenv import load_dotenv
 from pathlib import Path
 from collections.abc import Generator
 import os
+import logging
+from urllib.parse import quote_plus
+from sqlalchemy import event
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / "config" / ".env.supabase")
 
-USER = os.getenv("user")
-PASSWORD = os.getenv("password")
-HOST = os.getenv("host")
-PORT = os.getenv("port")
-DBNAME = os.getenv("dbname")
+logger = logging.getLogger(__name__)
 
-DATABASE_URL = f"postgresql+psycopg2://{USER}:{PASSWORD}@{HOST}:{PORT}/{DBNAME}?sslmode=require"
+def _required_setting(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Database setting '{name}' is not configured.")
+    return value
+
+
+USER = _required_setting("user")
+PASSWORD = _required_setting("password")
+HOST = _required_setting("host")
+PORT = _required_setting("port")
+DBNAME = _required_setting("dbname")
+
+DATABASE_URL = (
+    f"postgresql+psycopg2://{quote_plus(USER)}:{quote_plus(PASSWORD)}"
+    f"@{HOST}:{PORT}/{quote_plus(DBNAME)}?sslmode=require"
+)
 
 
 def _get_int(name: str, default: int, minimum: int = 1) -> int:
@@ -40,7 +55,15 @@ engine = create_engine(
     pool_timeout=_get_int("DB_POOL_TIMEOUT", 30),
     pool_pre_ping=True,
 )
-session = sessionmaker(bind=engine)
+
+
+@event.listens_for(engine, "connect")
+def _log_database_connection(dbapi_connection, connection_record) -> None:
+    """Log only after the database has accepted a new physical connection."""
+    logger.info("DB successfully conected")
+
+
+session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 def get_db() -> Generator[Session, None, None]:
     db = session()

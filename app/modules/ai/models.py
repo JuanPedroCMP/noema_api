@@ -97,7 +97,6 @@ class UserApiKeyOut(BaseModel):
     id_ai_provider: UUID
     id_user: UUID
     name: str
-    encrypted_key: str
     is_active: bool
     created_at: datetime | None
     updated_at: datetime| None
@@ -245,4 +244,3 @@ class AiUsageLogFilters(BaseModel):
     id_agent_model: Optional[UUID | None] = None
     usage_details: Optional[dict | None] = None
     created_at: Optional[datetime | None] = None
-

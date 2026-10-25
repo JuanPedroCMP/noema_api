@@ -18,8 +18,6 @@ class GoogleAccountOut(BaseModel):
     id_user: UUID
     google_user_id: str | None
     email_google: str
-    access_token_enc: str | None
-    refresh_token_enc: str | None
     granted_scopes: str | None
     is_active: bool 
     expires_at: datetime | None

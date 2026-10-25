@@ -1,7 +1,7 @@
 from ...core.db_models.theme_models import UserColorTheme, UserTypographyTheme
-from ...core.security import get_current_user, encrypt, decrypt
+from ...core.security import get_current_user
 from sqlalchemy.orm import Session
-from sqlalchemy import select, or_, and_
+from sqlalchemy import select
 from fastapi import HTTPException, status
 from uuid import UUID, uuid4
 from .models import UserColorThemeCreate, UserTypographyThemeUpdate, UserColorThemeUpdate, UserTypographyThemeCreate
@@ -11,12 +11,11 @@ from datetime import datetime
 ### User Color Theme
 ################
 def get_user_color_theme(token: str, identificator : str, db: Session):
-    color_theme = UserColorTheme()
     try:  
         color_theme = db.scalar(select(UserColorTheme).where(
                 UserColorTheme.id == UUID(identificator),
         ))
-    except:
+    except ValueError:
         color_theme = db.scalar(select(UserColorTheme).where(
                 UserColorTheme.name == identificator
         ))
@@ -37,15 +36,14 @@ def list_user_color_themes(token: str, db: Session, filters: dict | None) -> lis
 
     stmt = stmt.where(UserColorTheme.id_user == user.id)
     
-    for k, v in filters.items():
+    for k, v in (filters or {}).items():
+        if not hasattr(UserColorTheme, k):
+            raise HTTPException(status_code=400, detail=f"Invalid filter: {k}")
         collum_attr = getattr(UserColorTheme, k)
         stmt = stmt.where(collum_attr == v)
     
     color_themes = db.scalars(stmt).all()
     
-    if color_themes is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="color theme não encontrado")
-        
     return color_themes
 
 def create_user_color_theme(token: str, color_theme_data: UserColorThemeCreate, db: Session) -> UserColorTheme:
@@ -99,12 +97,11 @@ def delete_user_color_theme(token: str, identificator : str, db: Session) -> boo
 ### User Typography Theme
 ################
 def get_user_typography_theme(identificator : str, db: Session, token: str):
-    typography_theme = UserTypographyTheme()
     try:  
         typography_theme = db.scalar(select(UserTypographyTheme).where(
                 UserTypographyTheme.id == UUID(identificator),
         ))
-    except:
+    except ValueError:
         typography_theme = db.scalar(select(UserTypographyTheme).where(
                 UserTypographyTheme.name == identificator
         ))
@@ -125,15 +122,14 @@ def list_user_typography_themes(db: Session, filters: dict | None, token: str) -
     
     stmt = stmt.where(UserTypographyTheme.id_user == user.id)
     
-    for k, v in filters.items():
+    for k, v in (filters or {}).items():
+        if not hasattr(UserTypographyTheme, k):
+            raise HTTPException(status_code=400, detail=f"Invalid filter: {k}")
         collum_attr = getattr(UserTypographyTheme, k)
         stmt = stmt.where(collum_attr == v)
     
     typography_themes = db.scalars(stmt).all()
     
-    if typography_themes is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="color theme não encontrado")
-        
     return typography_themes
 
 def create_user_typography_theme(typography_theme_data: UserTypographyThemeCreate, db: Session, token: str) -> UserTypographyTheme:
