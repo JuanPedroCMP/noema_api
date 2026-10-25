@@ -24,13 +24,21 @@ from ...ai.services import (
 )
 from ..models import (
     CreateEssayQuestionResponse,
+    CreateFlashcard,
+    CreateFlashcardGroup,
+    CreateFlashcardsResponse,
+    CreateFeynmanResponse,
     CreateMultipleChoiceQuestionResponse,
     CreateStudySessionResponse,
     EvaluateEssayQuestionResponse,
     EvaluateFeynmanResponse,
+    EvaluateMultipleChoiceQuestionResponse,
     ManipulateGraphResponse,
+    ManipulateFlashcardGroup,
     ManipulateNodeResponse,
     SearchQueries,
+    StudyAssistentResponse,
+    StudyManagerResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,12 +62,17 @@ TASK_RESPONSE_MODELS: dict[str, Any] = {
     "evaluate_essay_question": EvaluateEssayQuestionResponse,
     "create_essay_question": CreateEssayQuestionResponse,
     "create_multiple_choice_question": CreateMultipleChoiceQuestionResponse,
-    "evaluate_multiple_choice_question": "EvaluateMultipleChoiceQuestionResponse",
-    "create_feynman": "CreateFeynmanResponse",
+    "evaluate_multiple_choice_question": EvaluateMultipleChoiceQuestionResponse,
+    "create_feynman": CreateFeynmanResponse,
     "evaluate_feynman": EvaluateFeynmanResponse,
-    "create_flashcard": "CreateFlashcard",
-    "study_manager": "StudyManagerResponse",
-    "study_assistent": "studyAssistentResponse",
+    "evaluate_feynman ": EvaluateFeynmanResponse,
+    "create_flashcard": CreateFlashcard,
+    "create_flashcardS": CreateFlashcardsResponse,
+    "study_manager": StudyManagerResponse,
+    "study_assistent": StudyAssistentResponse,
+    "create_flashcard_group": CreateFlashcardGroup,
+    "manipulate_flashcard_group": ManipulateFlashcardGroup,
+    "create_flashcards": CreateFlashcardsResponse,
 }
 
 

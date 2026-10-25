@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Optional
 
 from pydantic import BaseModel, Json, Field
@@ -52,22 +54,23 @@ class EvaluateFeynmanResponse(BaseModel):
     conceptualRequisites: ConceptualRequisites
     textCoerence: TextCoerence
     feynmanRequisites: FeynmanRequisites
-       
-class FeynmanRequisites:
-    explanation_acessibility: int = Field(me=0, le=100)
-    logic_progression: int = Field(me=0, le=100)
-    gaps: int = Field(me=0, le=100)
+
+
+class FeynmanRequisites(BaseModel):
+    explanation_acessibility: int = Field(ge=0, le=100)
+    logic_progression: int = Field(ge=0, le=100)
+    gaps: int = Field(ge=0, le=100)
     
 
 class ConceptualRequisites(BaseModel): ## TODO Verificar inglês
-    fidelity_to_question: int = Field(me=0, le=100)
-    teoric_precision: int = Field(me=0, le=100)
-    response_deep: int = Field(me=0, le=100)
+    fidelity_to_question: int = Field(ge=0, le=100)
+    teoric_precision: int = Field(ge=0, le=100)
+    response_deep: int = Field(ge=0, le=100)
     
-class TextCoerence:
-    coerence: int = Field(me=0, le=100)
-    argument_struct: int = Field(me=0, le=100)
-    argument_clarity: int = Field(me=0, le=100)
+class TextCoerence(BaseModel):
+    coerence: int = Field(ge=0, le=100)
+    argument_struct: int = Field(ge=0, le=100)
+    argument_clarity: int = Field(ge=0, le=100)
     
 ###################
 ### ManipulateNodeResponse
@@ -94,6 +97,42 @@ class CreateStudySessionResponse(BaseModel):
     dissertative_questions_ids: Optional[list[int] | None] = None
     target: str
 
+
+###################
+### Flashcards
+###################
+class CreateFlashcard(BaseModel):
+    title: str
+    statement: str
+    target_skill: str | None = None
+
+
+class CreateFlashcardsResponse(BaseModel):
+    flashcards: list[CreateFlashcard]
+
+
+class CreateFlashcardGroup(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class ManipulateFlashcardGroup(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+class StudyManagerResponse(BaseModel):
+    target_duration_min: int = Field(gt=0)
+    interleaving_enabled: bool = False
+    diagnostic_focus: bool = False
+    total_activities: int = Field(default=0, ge=0)
+
+
+class StudyAssistentResponse(BaseModel):
+    feedback: str
+    next_activity: str | None = None
+    recommendations: list[str] = Field(default_factory=list)
+
 ###################
 ### CreateEssayQuestionResponse
 ###################
@@ -102,6 +141,14 @@ class CreateEssayQuestionResponse(BaseModel):
     statement: str
     reference_correct_answer: str
     
+###################
+### CreateFeynmanResponse
+###################
+class CreateFeynmanResponse(BaseModel):
+    title: str
+    statement: str
+    reference_correct_answer: str
+
 ###################
 ### CreateMultipleChoiceQuestionResponse
 ###################
