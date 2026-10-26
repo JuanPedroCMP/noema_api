@@ -33,6 +33,7 @@ from ..models import (
     EvaluateEssayQuestionResponse,
     EvaluateFeynmanResponse,
     EvaluateMultipleChoiceQuestionResponse,
+    GenerateNodeDescription,
     ManipulateGraphResponse,
     ManipulateFlashcardGroup,
     ManipulateNodeResponse,
@@ -73,6 +74,7 @@ TASK_RESPONSE_MODELS: dict[str, Any] = {
     "create_flashcard_group": CreateFlashcardGroup,
     "manipulate_flashcard_group": ManipulateFlashcardGroup,
     "create_flashcards": CreateFlashcardsResponse,
+    "generate_node_description": GenerateNodeDescription
 }
 
 

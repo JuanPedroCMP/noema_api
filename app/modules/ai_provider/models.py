@@ -33,8 +33,11 @@ class ManipulateGraphResponse(BaseModel):
 class GraphNode(BaseModel):
     node_id: int
     title: str
-    description:str
     type: GraphType
+
+class GenerateNodeDescription(BaseModel):
+    description: str
+
 class GraphEdge(BaseModel):
     source_node: int
     target_node: int
