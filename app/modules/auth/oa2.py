@@ -1,6 +1,7 @@
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
@@ -25,14 +26,21 @@ GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 DEFAULT_SCOPES = "openid email profile"
+DEFAULT_GOOGLE_REDIRECT_URI = (
+    "https://api.tccnoema.me/api/v1/auth/google/callback"
+)
 STATE_TTL_SECONDS = 600
 
-load_dotenv(dotenv_path='app/config/.env.security')
+load_dotenv(
+    dotenv_path=Path(__file__).resolve().parents[2] / "config" / ".env.security"
+)
 
 def _google_config() -> tuple[str, str, str, str]:
     client_id = os.getenv("GOOGLE_CLIENT_ID")
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
-    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI")
+    redirect_uri = (
+        os.getenv("GOOGLE_REDIRECT_URI") or DEFAULT_GOOGLE_REDIRECT_URI
+    )
     scopes = os.getenv("GOOGLE_SCOPES", DEFAULT_SCOPES)
 
     if not client_id or not client_secret or not redirect_uri:
@@ -115,7 +123,7 @@ async def google_oauth_callback(
     if error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Google authorization failed: {error}",
+            detail="Google authorization was denied or could not be completed.",
         )
 
     code = request.query_params.get("code")
@@ -129,41 +137,62 @@ async def google_oauth_callback(
     user_id = _read_state(state)
     client_id, client_secret, redirect_uri, _ = _google_config()
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        token_response = await client.post(
-            GOOGLE_TOKEN_URL,
-            data={
-                "code": code,
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-            },
-        )
-        if token_response.is_error:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Google token exchange failed.",
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            token_response = await client.post(
+                GOOGLE_TOKEN_URL,
+                data={
+                    "code": code,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                },
             )
+            if token_response.is_error:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Google token exchange failed.",
+                )
 
-        token_data = token_response.json()
-        access_token = token_data.get("access_token")
-        if not access_token:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Google did not return an access token.",
-            )
+            token_data = token_response.json()
+            if not isinstance(token_data, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Google returned an invalid token response.",
+                )
+            access_token = token_data.get("access_token")
+            if not access_token:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Google did not return an access token.",
+                )
 
-        userinfo_response = await client.get(
-            GOOGLE_USERINFO_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        if userinfo_response.is_error:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Google user information request failed.",
+            userinfo_response = await client.get(
+                GOOGLE_USERINFO_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
             )
-        userinfo = userinfo_response.json()
+            if userinfo_response.is_error:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Google user information request failed.",
+                )
+            userinfo = userinfo_response.json()
+            if not isinstance(userinfo, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Google returned invalid user information.",
+                )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not communicate with Google OAuth.",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Google returned an invalid response.",
+        ) from exc
 
     google_user_id = userinfo.get("sub")
     email = userinfo.get("email")
@@ -177,11 +206,17 @@ async def google_oauth_callback(
         select(GoogleAccount).where(GoogleAccount.id_user == user_id)
     )
     expires_in = token_data.get("expires_in")
-    expires_at = (
-        datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
-        if expires_in
-        else None
-    )
+    try:
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+            if expires_in is not None
+            else None
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Google returned an invalid token expiration.",
+        ) from exc
     values = {
         "google_user_id": google_user_id,
         "email_google": email,
