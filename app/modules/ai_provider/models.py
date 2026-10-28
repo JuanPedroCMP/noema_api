@@ -5,6 +5,7 @@ from typing import Optional
 from pydantic import BaseModel, Json, Field
 from uuid import UUID
 from enum import Enum
+
 class AiResponseOut(BaseModel):
     id_agent: UUID
     id_model:UUID
@@ -26,7 +27,7 @@ class EdgeType(Enum):
 
 class ManipulateGraphResponse(BaseModel):
     graph_title: str
-  # graph_description:str
+  # graph_description:str 
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     

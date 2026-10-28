@@ -23,6 +23,7 @@ class AgentModelQuality(str, enum.Enum):
 class TaskType(str, enum.Enum):
     MANIPULATE_GRAPH = 'manipulate_graph'
     MANIPULATE_NODE = 'manipulate_node'
+    GENERATE_NODE_DESCRIPTION = 'generate_node_description'
     CREATE_STUDY_SESSION = 'create_study_session'
     EVALUATE_ESSAY_QUESTION = 'evaluate_essay_question'
     CREATE_ESSAY_QUESTION = 'create_essay_question'
