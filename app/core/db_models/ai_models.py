@@ -30,7 +30,7 @@ class TaskType(str, enum.Enum):
     CREATE_MULTIPLE_CHOICE_QUESTION = 'create_multiple_choice_question'
     EVALUATE_MULTIPLE_CHOICE_QUESTION = 'evaluate_multiple_choice_question'
     CREATE_FEYNMAN = 'create_feynman'
-    EVALUATE_FEYNMAN_ = 'evaluate_feynman '
+    EVALUATE_FEYNMAN = 'evaluate_feynman'
     RECOMMEND_STUDY_RESOURCE = 'recommend_study_resource'
     STUDY_MANAGER = 'study_manager'
     STUDY_ASSISTENT = 'study_assistent'
