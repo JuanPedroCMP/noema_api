@@ -37,7 +37,7 @@ class TaskType(str, enum.Enum):
     CREATE_FLASHCARD_GROUP = 'create_flashcard_group'
     MANIPULATE_FLASHCARD_GROUP = 'manipulate_flashcard_group'
     CREATE_FLASHCARD = 'create_flashcard'
-    CREATE_FLASHCARDS = 'create_flashcardS'
+    CREATE_FLASHCARDS = 'create_flashcards'
 class Agent(Base):
     __tablename__ = 'agent'
     __table_args__ = (
