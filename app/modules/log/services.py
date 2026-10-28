@@ -1,11 +1,111 @@
-from ...core.db_models.log_models import GenericLog
-from ...core.security import get_current_user
-from sqlalchemy.orm import Session
-from sqlalchemy import select, and_
-from fastapi import HTTPException, status
+import logging
+import traceback
+from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID, uuid4
-from .models import GenericLogCreate, GenericLogCreate
-from datetime import datetime
+
+from fastapi import Request
+from sqlalchemy import and_, select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
+from ...core.database import session
+from ...core.db_models.log_models import ErrorLog, GenericLog
+from ...core.security import get_current_user
+from fastapi import HTTPException, status
+from .models import GenericLogCreate
+
+logger = logging.getLogger(__name__)
+
+
+def _request_context(request: Request) -> dict[str, Any]:
+    route = request.scope.get("route")
+    client = request.client
+    return {
+        "request_id": getattr(request.state, "request_id", None),
+        "method": request.method,
+        "endpoint": getattr(route, "path", request.url.path),
+        "path": request.url.path,
+        "client_ip": client.host if client else None,
+        "user_agent": request.headers.get("user-agent"),
+    }
+
+
+def record_request_metrics(
+    request: Request,
+    status_code: int,
+    duration_ms: float,
+) -> None:
+    details = {
+        **_request_context(request),
+        "status_code": status_code,
+        "duration_ms": round(duration_ms, 3),
+        "content_length": request.headers.get("content-length"),
+    }
+    db = session()
+    try:
+        db.add(
+            GenericLog(
+                id=uuid4(),
+                type="http_request",
+                id_user=None,
+                details=details,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Could not persist HTTP request metrics")
+    finally:
+        db.close()
+
+
+def record_error(
+    request: Request,
+    status_code: int,
+    error_type: str,
+    message: str,
+    traceback_text: str | None = None,
+) -> None:
+    details = {
+        **_request_context(request),
+        "status_code": status_code,
+        "error_type": error_type,
+        "message": message,
+        "traceback": traceback_text,
+    }
+    request.state.error_logged = True
+    db = session()
+    try:
+        db.add(
+            ErrorLog(
+                id=uuid4(),
+                id_user=None,
+                error_details=details,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Could not persist API error report")
+    finally:
+        db.close()
+
+
+def record_exception(
+    request: Request,
+    status_code: int,
+    exc: Exception,
+) -> None:
+    record_error(
+        request,
+        status_code,
+        type(exc).__name__,
+        str(exc),
+        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+    )
 
 ################   
 ### Generic Log
@@ -49,9 +149,8 @@ def create_generic_log(token: str, generic_log_data: GenericLogCreate, db: Sessi
         type=generic_log_data.type,
         id_user=generic_log_data.id_user,
         details=generic_log_data.details,
-        created_at=datetime.now()
+        created_at=datetime.now(timezone.utc),
     )
-    new_generic_log.created_at = datetime.now()      
     db.add(new_generic_log)
     db.commit()
     db.refresh(new_generic_log)

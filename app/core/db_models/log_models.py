@@ -42,7 +42,7 @@ class ErrorLog(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     id_user: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid)
-    error_datails: Mapped[Optional[dict]] = mapped_column(JSON)
+    error_details: Mapped[Optional[dict]] = mapped_column("error_datails", JSON)
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
 
     user: Mapped[Optional['User']] = relationship('User', back_populates='error_log')
@@ -58,7 +58,7 @@ class GenericLog(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     type: Mapped[Optional[str]] = mapped_column(String(255))
-    datails: Mapped[Optional[dict]] = mapped_column(JSON)
+    details: Mapped[Optional[dict]] = mapped_column("datails", JSON)
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
     id_user: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid)
 

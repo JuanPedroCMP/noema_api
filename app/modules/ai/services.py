@@ -133,12 +133,13 @@ def delete_ai_model(identificator : str, db: Session) -> bool:
 ### User API Key
 ################
 
-def get_user_api_key(token: str, identificator: str, db: Session) -> UserApiKey:
+def get_user_api_key(token: str, identificator: UUID | str, db: Session) -> UserApiKey:
     user = get_current_user(token, db)
     try:
+        key_id = identificator if isinstance(identificator, UUID) else UUID(identificator)
         user_api_key = db.scalar(
             select(UserApiKey).where(
-                and_(UserApiKey.id_user == user.id, UserApiKey.id == UUID(identificator))
+                and_(UserApiKey.id_user == user.id, UserApiKey.id == key_id)
             )
         )
     except ValueError:
