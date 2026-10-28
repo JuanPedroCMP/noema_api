@@ -10,10 +10,11 @@ from datetime import datetime
 ################
 ### Provider
 ################
-def get_provider(identificator : str, db: Session):
+def get_provider(identificator: UUID | str, db: Session) -> AiProvider:
     try:
+        provider_id = identificator if isinstance(identificator, UUID) else UUID(identificator)
         provider = db.scalar(
-            select(AiProvider).where(AiProvider.id == UUID(identificator))
+            select(AiProvider).where(AiProvider.id == provider_id)
         )
     except ValueError:
         provider = db.scalar(
@@ -71,9 +72,10 @@ def delete_provider(identificator : str, db: Session) -> bool:
 ################
 ### AI Model
 ################
-def get_ai_model(identificator : str, db: Session):
+def get_ai_model(identificator: UUID | str, db: Session) -> AiModel:
     try:
-        ai_model = db.scalar(select(AiModel).where(AiModel.id == UUID(identificator)))
+        model_id = identificator if isinstance(identificator, UUID) else UUID(identificator)
+        ai_model = db.scalar(select(AiModel).where(AiModel.id == model_id))
     except ValueError:
         ai_model = db.scalar(select(AiModel).where(AiModel.slug == identificator))
     if ai_model is None:
