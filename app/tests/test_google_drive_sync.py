@@ -55,17 +55,52 @@ class ScalarRows:
         return self.rows
 
 
+class MappingResult:
+    def __init__(self, row):
+        self.row = row
+
+    def mappings(self):
+        return self
+
+    def one_or_none(self):
+        return self.row
+
+
 class FakeDB:
-    def __init__(self, scalar_results=(), rows_results=()):
+    def __init__(self, scalar_results=(), rows_results=(), execute_row=None):
         self.scalar_results = list(scalar_results)
         self.rows_results = list(rows_results)
+        self.execute_row = execute_row
         self.added = []
         self.deleted = []
         self.commits = 0
         self.rollbacks = 0
+        self.executed_statements = []
 
     def scalar(self, _statement):
         return self.scalar_results.pop(0) if self.scalar_results else None
+
+    def execute(self, statement):
+        self.executed_statements.append(statement)
+        if getattr(statement, "is_delete", False):
+            return SimpleNamespace(rowcount=1)
+        return MappingResult(
+            self.execute_row
+            or {
+                "id": ACCOUNT_ID,
+                "id_user": USER_ID,
+                "google_user_id": "google-subject",
+                "email_google": "reader@example.com",
+                "granted_scopes": "openid",
+                "is_active": True,
+                "expires_at": None,
+                "last_refresh_at": None,
+                "updated_at": None,
+                "created_at": None,
+                "drive_appdata_status": "unknown",
+                "scope_checked_at": None,
+            }
+        )
 
     def scalars(self, _statement):
         rows = self.rows_results.pop(0) if self.rows_results else []
@@ -388,6 +423,70 @@ def test_account_status_never_exposes_legacy_token_columns(monkeypatch):
     assert "refresh_token" not in result.model_dump()
     assert "access_token_enc" not in GoogleAccountOut.model_fields
     assert "refresh_token_enc" not in GoogleAccountOut.model_fields
+
+
+def test_legacy_google_account_get_works_before_schema_migration(monkeypatch):
+    monkeypatch.setattr(
+        auth_service,
+        "get_current_user",
+        lambda _token, _db: SimpleNamespace(id=USER_ID),
+    )
+    db = FakeDB(
+        execute_row={
+            "id": ACCOUNT_ID,
+            "id_user": USER_ID,
+            "google_user_id": "google-subject",
+            "email_google": "reader@example.com",
+            "granted_scopes": "openid",
+            "is_active": True,
+            "expires_at": None,
+            "last_refresh_at": None,
+            "updated_at": None,
+            "created_at": None,
+            "drive_appdata_status": "unknown",
+            "scope_checked_at": None,
+        }
+    )
+
+    result = auth_service.get_google_account_out("noema", str(USER_ID), db)
+
+    selected_columns = str(db.executed_statements[0])
+    assert "to_jsonb(google_account)->>'drive_appdata_status'" in selected_columns
+    assert "to_jsonb(google_account)->>'scope_checked_at'" in selected_columns
+    assert "access_token_enc" not in selected_columns
+    assert "refresh_token_enc" not in selected_columns
+    assert result.drive_appdata_status == "unknown"
+    assert result.scope_checked_at is None
+
+
+def test_legacy_google_account_get_returns_persisted_status_after_migration(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        auth_service,
+        "get_current_user",
+        lambda _token, _db: SimpleNamespace(id=USER_ID),
+    )
+    row = {
+        "id": ACCOUNT_ID,
+        "id_user": USER_ID,
+        "google_user_id": "google-subject",
+        "email_google": "reader@example.com",
+        "granted_scopes": GOOGLE_DRIVE_APPDATA_SCOPE,
+        "is_active": True,
+        "expires_at": None,
+        "last_refresh_at": None,
+        "updated_at": None,
+        "created_at": None,
+        "drive_appdata_status": "granted",
+        "scope_checked_at": datetime(2026, 10, 31, tzinfo=timezone.utc),
+    }
+    db = FakeDB(execute_row=row)
+
+    result = auth_service.get_google_account_out("noema", str(USER_ID), db)
+
+    assert result.drive_appdata_status == "granted"
+    assert result.scope_checked_at == row["scope_checked_at"]
 
 
 def test_backup_metadata_create_retry_is_idempotent_and_owner_checked(monkeypatch):

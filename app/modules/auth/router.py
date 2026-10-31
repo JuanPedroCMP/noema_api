@@ -5,9 +5,13 @@ from sqlalchemy.orm import Session
 from ...core.database import get_db
 from ...core.security import oauth2_scheme
 from .models import GoogleAccountOut, LoginData
-from .service import confirm_password_reset, login, start_reset_password
+from .service import (
+    confirm_password_reset,
+    get_google_account_out,
+    login,
+    start_reset_password,
+)
 from .service import delete_google_account as dga
-from .service import get_google_account as gga
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -49,7 +53,7 @@ def get_google_account(
     db: Session = Depends(get_db),
     token: str = Depends(oauth2_scheme),
 ):
-    return gga(token, identificator, db)
+    return get_google_account_out(token, identificator, db)
 
 
 @router.post("/google/create", deprecated=True)

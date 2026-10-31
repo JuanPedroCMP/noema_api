@@ -68,8 +68,7 @@ CREATE TABLE IF NOT EXISTS google_drive.backup_operation_idempotency (
     id UUID NOT NULL,
     id_google_account UUID NOT NULL,
     idempotency_key VARCHAR(128) NOT NULL,
-    operation_kind VARCHAR(16) NOT NULL
-        CHECK (operation_kind IN ('create', 'update')),
+    operation_kind VARCHAR(16) NOT NULL,
     request_hash VARCHAR(64) NOT NULL,
     id_backup_file UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,

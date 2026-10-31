@@ -9,8 +9,9 @@ from uuid import UUID, uuid4
 
 from dotenv import load_dotenv
 from fastapi import HTTPException, status
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, or_, select, text
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.modules.user.models import UserUpdate, validate_password_strength
 from app.modules.user.service import get_user_by_identificator
@@ -22,7 +23,7 @@ from ...core.security import (
     hash_password,
     verify_password,
 )
-from .models import LoginData
+from .models import GoogleAccountOut, LoginData
 
 
 def login(login_data: LoginData, db: Session) -> dict:
@@ -192,8 +193,7 @@ def confirm_password_reset(code: str, token: str, db: Session, new_password):
 ################
 ### Google Account
 ################
-def get_google_account(token: str, identificator: str, db: Session):
-    user = get_current_user(token, db)
+def _google_account_filters(identificator: str) -> list[ColumnElement[bool]]:
     account_identifiers = [GoogleAccount.google_user_id == identificator]
     try:
         account_uuid = UUID(identificator)
@@ -206,24 +206,71 @@ def get_google_account(token: str, identificator: str, db: Session):
                 GoogleAccount.id_user == account_uuid,
             ]
         )
-    google_account = db.scalar(
-        select(GoogleAccount).where(
-            GoogleAccount.id_user == user.id,
-            or_(*account_identifiers),
+    return account_identifiers
+
+
+def get_google_account_out(
+    token: str, identificator: str, db: Session
+) -> GoogleAccountOut:
+    user = get_current_user(token, db)
+    row = (
+        db.execute(
+            select(
+                GoogleAccount.id,
+                GoogleAccount.id_user,
+                GoogleAccount.google_user_id,
+                GoogleAccount.email_google,
+                GoogleAccount.granted_scopes,
+                GoogleAccount.is_active,
+                GoogleAccount.expires_at,
+                GoogleAccount.last_refresh_at,
+                GoogleAccount.updated_at,
+                GoogleAccount.created_at,
+                text(
+                    "COALESCE("
+                    "to_jsonb(google_account)->>'drive_appdata_status', "
+                    "'unknown'"
+                    ") AS drive_appdata_status"
+                ),
+                text(
+                    "NULLIF("
+                    "to_jsonb(google_account)->>'scope_checked_at', "
+                    "''"
+                    ")::timestamptz AS scope_checked_at"
+                ),
+            ).where(
+                GoogleAccount.id_user == user.id,
+                or_(*_google_account_filters(identificator)),
+            )
         )
+        .mappings()
+        .one_or_none()
     )
-    if google_account is None:
+    if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Google account not found",
         )
 
-    return google_account
+    return GoogleAccountOut.model_validate(row)
+
+
+def get_google_account(token: str, identificator: str, db: Session) -> GoogleAccountOut:
+    return get_google_account_out(token, identificator, db)
 
 
 def delete_google_account(token: str, identificator: str, db: Session) -> bool:
-    google_account = get_google_account(token, identificator, db)
-
-    db.delete(google_account)
+    user = get_current_user(token, db)
+    result = db.execute(
+        delete(GoogleAccount).where(
+            GoogleAccount.id_user == user.id,
+            or_(*_google_account_filters(identificator)),
+        )
+    )
+    if result.rowcount == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Google account not found",
+        )
     db.commit()
     return True
