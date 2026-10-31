@@ -1,9 +1,20 @@
-from typing import Optional
 import datetime
 import uuid
+from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKeyConstraint, PrimaryKeyConstraint, String, Text, UniqueConstraint, Uuid, text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKeyConstraint,
+    PrimaryKeyConstraint,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
 
 class Base(DeclarativeBase):
     pass
@@ -49,7 +60,11 @@ class GoogleAccount(Base):
     email_google: Mapped[Optional[str]] = mapped_column(String(254))
     access_token_enc: Mapped[Optional[str]] = mapped_column(Text)
     refresh_token_enc: Mapped[Optional[str]] = mapped_column(Text)
-    granted_scopes: Mapped[Optional[str]] = mapped_column(String(255))
+    granted_scopes: Mapped[Optional[str]] = mapped_column(String(2048))
+    drive_appdata_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'unknown'")
+    )
+    scope_checked_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
     is_active: Mapped[Optional[bool]] = mapped_column(Boolean, server_default=text('true'))
     expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
     last_refresh_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))

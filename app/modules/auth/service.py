@@ -1,89 +1,96 @@
-from dotenv import load_dotenv
-
-from app.modules.user.models import UserUpdate
-from app.modules.user.service import get_user_by_identificator
-
-from ...core.security import create_access_token, hash_password, verify_password, get_current_user, encrypt
-from sqlalchemy.orm import Session
-from ...core.db_models.app_auth_models import PasswordResetToken, User, GoogleAccount
-from .models import LoginData, GoogleAccountCreate, GoogleAccountUpdate
-from sqlalchemy import select, or_, and_
-from fastapi import HTTPException, status
-from uuid import UUID, uuid4
-from datetime import datetime, timedelta
-from html import escape
+import os
 import secrets
 import smtplib
-import os
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html import escape
+from uuid import UUID, uuid4
+
+from dotenv import load_dotenv
+from fastapi import HTTPException, status
+from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import Session
+
+from app.modules.user.models import UserUpdate, validate_password_strength
+from app.modules.user.service import get_user_by_identificator
+
+from ...core.db_models.app_auth_models import GoogleAccount, PasswordResetToken, User
+from ...core.security import (
+    create_access_token,
+    get_current_user,
+    hash_password,
+    verify_password,
+)
+from .models import LoginData
 
 
 def login(login_data: LoginData, db: Session) -> dict:
-  credentials_exception = HTTPException(
-    status_code=status.HTTP_401_UNAUTHORIZED,
-    detail="Credenciais inválidas",
-  )
-    
-  login_user = db.scalar(select(User).where(
-    or_(
-    User.primary_email == login_data.login_identificator,
-    User.user_name == login_data.login_identificator
-    )))
-  
-  if login_user is None: 
-    raise credentials_exception
-  
-  if not login_user.is_active:
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Conta desativada")
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Credenciais inválidas",
+    )
 
-  if not verify_password(login_data.password, login_user.password_hash): 
-    raise credentials_exception
+    login_user = db.scalar(
+        select(User).where(
+            or_(
+                User.primary_email == login_data.login_identificator,
+                User.user_name == login_data.login_identificator,
+            )
+        )
+    )
 
-  token = create_access_token(login_user.id)
+    if login_user is None:
+        raise credentials_exception
 
-  return {
-    "access_token": token,
-    "token_type": "bearer"
-    }
+    if not login_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Conta desativada"
+        )
+
+    if not verify_password(login_data.password, login_user.password_hash):
+        raise credentials_exception
+
+    token = create_access_token(login_user.id)
+
+    return {"access_token": token, "token_type": "bearer"}
 
 
 def start_reset_password(token: str, db: Session):
-  code: str = f"{secrets.randbelow(1_000_000):06d}"
-  created_at = datetime.now()
-  expires_at = datetime.now() + timedelta(minutes=10)
-  
-  user = get_user_by_identificator(db=db, identificator=token)
-    
-  pwd_reset = PasswordResetToken(
-    id = uuid4(),
-    user_id = user.id,
-    token_hash = code,
-    created_at = created_at,
-    expires_at = expires_at
-  )
-  
-  # Configurações de e-mail
-  load_dotenv(dotenv_path='app/config/.env.security')
-  remetente = os.getenv("SMTP_USERNAME", "noema.app.services@gmail.com")
-  senha = os.getenv("SMTP_PASSWORD")
-  if not senha:
-      raise RuntimeError("SMTP_PASSWORD não está configurada.")
+    code: str = f"{secrets.randbelow(1_000_000):06d}"
+    created_at = datetime.now()
+    expires_at = datetime.now() + timedelta(minutes=10)
 
-  destinatario = user.primary_email
-  
-  assunto = "Redefinição de senha | Noema"
+    user = get_user_by_identificator(db=db, identificator=token)
 
-  # Criando a estrutura da mensagem
-  msg = MIMEMultipart("alternative")
-  msg["From"] = remetente
-  msg["To"] = destinatario
-  msg["Subject"] = assunto
-  
-  
-  created_at_text = created_at.strftime("%d/%m/%Y às %H:%M")
-  expires_at_text = expires_at.strftime("%d/%m/%Y às %H:%M")
-  html_content = f"""
+    pwd_reset = PasswordResetToken(
+        id=uuid4(),
+        user_id=user.id,
+        token_hash=code,
+        created_at=created_at,
+        expires_at=expires_at,
+    )
+
+    # Configurações de e-mail
+    load_dotenv(dotenv_path="app/config/.env.security")
+    remetente = os.getenv("SMTP_USERNAME", "noema.app.services@gmail.com")
+    senha = os.getenv("SMTP_PASSWORD")
+    if not senha:
+        raise RuntimeError("SMTP_PASSWORD não está configurada.")
+
+    destinatario = user.primary_email
+
+    assunto = "Redefinição de senha | Noema"
+
+    # Criando a estrutura da mensagem
+    msg = MIMEMultipart("alternative")
+    msg["From"] = remetente
+    msg["To"] = destinatario
+    msg["Subject"] = assunto
+
+    created_at_text = created_at.strftime("%d/%m/%Y às %H:%M")
+    expires_at_text = expires_at.strftime("%d/%m/%Y às %H:%M")
+    html_content = f"""
   <!doctype html>
   <html lang="pt-BR">
     <body style="margin:0;background:#f7f9fa;font-family:Arial,Helvetica,sans-serif;color:#263238;">
@@ -109,7 +116,7 @@ def start_reset_password(token: str, db: Session):
     </body>
   </html>
   """
-  text_content = f"""Redefinição de senha | Noema
+    text_content = f"""Redefinição de senha | Noema
 
 Olá,
 
@@ -125,138 +132,96 @@ Se você não solicitou essa alteração, ignore este e-mail.
 Atenciosamente,
 Equipe Noema
 """
-  
-  db.add(pwd_reset)
-  db.commit()
-  db.refresh(instance=pwd_reset)
 
-  msg.attach(MIMEText(text_content, "plain", "utf-8"))
-  msg.attach(MIMEText(html_content, "html", "utf-8"))
-  
-  # Conexão com o servidor SMTP do Gmail
-  try:
-      # Usando a porta 587 com TLS
-      with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as servidor:
-          servidor.starttls()
-          servidor.login(remetente, senha)
-          servidor.sendmail(remetente, destinatario, msg.as_string())
-  except smtplib.SMTPException as exc:
-      db.rollback()
-      raise RuntimeError("Não foi possível enviar o e-mail de redefinição.") from exc
+    db.add(pwd_reset)
+    db.commit()
+    db.refresh(instance=pwd_reset)
 
-  return {"message": "If the account exists, reset instructions were sent."}
+    msg.attach(MIMEText(text_content, "plain", "utf-8"))
+    msg.attach(MIMEText(html_content, "html", "utf-8"))
+
+    # Conexão com o servidor SMTP do Gmail
+    try:
+        # Usando a porta 587 com TLS
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as servidor:
+            servidor.starttls()
+            servidor.login(remetente, senha)
+            servidor.sendmail(remetente, destinatario, msg.as_string())
+    except smtplib.SMTPException as exc:
+        db.rollback()
+        raise RuntimeError("Não foi possível enviar o e-mail de redefinição.") from exc
+
+    return {"message": "If the account exists, reset instructions were sent."}
+
 
 def confirm_password_reset(code: str, token: str, db: Session, new_password):
-  user = get_user_by_identificator(db=db, identificator=token)
+    validate_password_strength(new_password)
+    user = get_user_by_identificator(db=db, identificator=token)
 
-  
-  reset_call = db.scalar(
-    select(PasswordResetToken).where(
-      and_(
-        PasswordResetToken.user_id == user.id,
-        PasswordResetToken.used_at.is_(None),
-        PasswordResetToken.expires_at > datetime.now(),
-        PasswordResetToken.token_hash == code,
-      )
+    reset_call = db.scalar(
+        select(PasswordResetToken).where(
+            and_(
+                PasswordResetToken.user_id == user.id,
+                PasswordResetToken.used_at.is_(None),
+                PasswordResetToken.expires_at > datetime.now(),
+                PasswordResetToken.token_hash == code,
+            )
+        )
     )
-  )
-  if reset_call:
-    reset_call.used_at = datetime.now()
-    db.commit()
-    db.refresh(reset_call)
-    
-    user_data = UserUpdate(password=new_password)
-    udp_data = dict()
-    for k, v in user_data.model_dump(exclude_unset=True, exclude_none=True, exclude_defaults=True).items():  
+    if reset_call:
+        reset_call.used_at = datetime.now()
+
+        user_data = UserUpdate(password=new_password)
+        udp_data = dict()
+        for k, v in user_data.model_dump(
+            exclude_unset=True, exclude_none=True, exclude_defaults=True
+        ).items():
             if k == "password":
                 user.password_hash = hash_password(v)
                 udp_data[k] = "**********"
             else:
                 udp_data[k] = v
                 setattr(user, k, v)
-    user.updated_at = datetime.now()
-    db.commit()
-    db.refresh(user)
-    return 'Sucesso' ## TODO concertar
-  return 'Falha'
+        user.updated_at = datetime.now()
+        db.commit()
+        db.refresh(user)
+        return "Sucesso"  ## TODO concertar
+    return "Falha"
 
-  
+
 ################
 ### Google Account
 ################
-def get_google_account(token: str, identificator : str, db: Session):    
-    google_account = db.scalar(select(GoogleAccount).where(
-      GoogleAccount.id == UUID(identificator),
-    ))
-
-    if google_account is None:
-      google_account = db.scalar(select(GoogleAccount).where(
-        GoogleAccount.id_user == UUID(identificator)
-      ))
-      
-    if google_account is None:
-      google_account = db.scalar(select(GoogleAccount).where(
-        GoogleAccount.google_user_id == identificator
-      ))
-        
+def get_google_account(token: str, identificator: str, db: Session):
     user = get_current_user(token, db)
-
+    account_identifiers = [GoogleAccount.google_user_id == identificator]
+    try:
+        account_uuid = UUID(identificator)
+    except ValueError:
+        account_uuid = None
+    if account_uuid is not None:
+        account_identifiers.extend(
+            [
+                GoogleAccount.id == account_uuid,
+                GoogleAccount.id_user == account_uuid,
+            ]
+        )
+    google_account = db.scalar(
+        select(GoogleAccount).where(
+            GoogleAccount.id_user == user.id,
+            or_(*account_identifiers),
+        )
+    )
     if google_account is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Google account not found",
         )
 
-    if google_account.id_user != user.id:
-        raise HTTPException(401, "Não autorizado")
-        
     return google_account
 
-def create_google_account(token: str, google_account_data: GoogleAccountCreate, db: Session) -> GoogleAccount:
-    user = get_current_user(token, db)
-    
-    if google_account_data.id_user != user.id:
-        raise HTTPException(401, "Não autorizado")
-    
-    new_google_account = GoogleAccount(
-        id=uuid4(),
-        id_user=google_account_data.id_user,
-        google_user_id=google_account_data.google_user_id,
-        email_google=google_account_data.email_google,
-        access_token_enc=google_account_data.access_token_enc,
-        refresh_token_enc=google_account_data.refresh_token_enc,
-        granted_scopes=google_account_data.granted_scopes,
-        is_active=google_account_data.is_active,
-        expires_at=google_account_data.expires_at,
-        created_at=datetime.now()
-    )
-    
-    db.add(new_google_account)
-    db.commit()
-    db.refresh(new_google_account)
-    return new_google_account
 
-def update_google_account(token: str, identificator : str, google_account_data: GoogleAccountUpdate, db: Session) -> GoogleAccount:
-    google_account = get_google_account(token, identificator, db)
-    
-    user = get_current_user(token, db)
-    
-    if google_account_data.id_user != user.id:
-        raise HTTPException(401, "Não autorizado")
-    
-    for k, v in google_account_data.model_dump(exclude_unset=True, exclude_none=True, exclude_defaults=True).items():  
-        if k == "id_user":
-          continue
-        if k == "access_token_enc" or k == "refresh_token_enc":
-          setattr(google_account, k, encrypt(v))
-        else:
-          setattr(google_account, k, v)
-    google_account.updated_at = datetime.now()
-    db.commit()
-    db.refresh(google_account)
-    return google_account
-
-def delete_google_account(token: str, identificator : str, db: Session) -> bool:
+def delete_google_account(token: str, identificator: str, db: Session) -> bool:
     google_account = get_google_account(token, identificator, db)
 
     db.delete(google_account)

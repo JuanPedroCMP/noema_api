@@ -104,6 +104,7 @@ def create_user_local_config(token: str, user_local_config_data: UserLocalConfig
     
     if user_local_config_data.id_user != user.id:
         raise HTTPException(401, "Não autorizado")
+
     
     new_user_local_config = UserLocalConfig(
         id=uuid4(),

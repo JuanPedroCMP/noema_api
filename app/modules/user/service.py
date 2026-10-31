@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, select
 import uuid
 from ...core.db_models.app_auth_models import User
-from ...core.security import get_current_user, oauth2_scheme, hash_password
+from ...core.security import get_current_user, oauth2_scheme, hash_password, verify_password
 from .models import UserCreate, UserUpdate
 from datetime import datetime
 
@@ -45,11 +45,18 @@ def get_user_by_identificator(identificator: str, db: Session) -> User:
 def up_user(user_data: UserUpdate, token: str, db: Session): 
   user = get_current_user(token=token, db=db)
   udp_data = dict()
+
+  if user_data.password is not None and not verify_password(
+      user_data.current_password or "", user.password_hash
+  ):
+      raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect.")
   
   for k, v in user_data.model_dump(exclude_unset=True, exclude_none=True, exclude_defaults=True).items():  
         if k == "password":
             user.password_hash = hash_password(v)
             udp_data[k] = "**********"
+        elif k == "current_password":
+            continue
         else:
             udp_data[k] = v
             setattr(user, k, v)
@@ -65,4 +72,3 @@ def del_user(token: str, db: Session) -> bool:
    db.delete(user)
    db.commit()
    return True
-

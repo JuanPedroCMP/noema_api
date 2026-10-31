@@ -147,4 +147,3 @@ class ResponseLanguagePreferenceOrderUpdate(BaseModel):
     preference_order: Optional[int | None] =None 
     id_user: Optional[UUID | None] = None
     id_language: Optional[UUID | None] = None
-
