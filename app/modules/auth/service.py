@@ -9,7 +9,8 @@ from uuid import UUID, uuid4
 
 from dotenv import load_dotenv
 from fastapi import HTTPException, status
-from sqlalchemy import and_, delete, or_, select, text
+from sqlalchemy import and_, or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -17,6 +18,7 @@ from app.modules.user.models import UserUpdate, validate_password_strength
 from app.modules.user.service import get_user_by_identificator
 
 from ...core.db_models.app_auth_models import GoogleAccount, PasswordResetToken, User
+from ...core.db_models.google_drive_models import BackupFile
 from ...core.security import (
     create_access_token,
     get_current_user,
@@ -261,16 +263,46 @@ def get_google_account(token: str, identificator: str, db: Session) -> GoogleAcc
 
 def delete_google_account(token: str, identificator: str, db: Session) -> bool:
     user = get_current_user(token, db)
-    result = db.execute(
-        delete(GoogleAccount).where(
+    account = db.scalar(
+        select(GoogleAccount)
+        .where(
             GoogleAccount.id_user == user.id,
             or_(*_google_account_filters(identificator)),
         )
+        .with_for_update()
     )
-    if result.rowcount == 0:
+    if account is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Google account not found",
         )
-    db.commit()
+    backup_id = db.scalar(
+        select(BackupFile.id)
+        .where(BackupFile.id_google_account == account.id)
+        .limit(1)
+    )
+    if backup_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "google_account_has_backups",
+                "message": (
+                    "Delete this account's backup metadata before unlinking it."
+                ),
+            },
+        )
+    db.delete(account)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "google_account_has_backups",
+                "message": (
+                    "Delete this account's backup metadata before unlinking it."
+                ),
+            },
+        ) from None
     return True

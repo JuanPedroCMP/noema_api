@@ -11,6 +11,7 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from app.core.database import get_db
 from app.core.db_models.google_drive_models import (
@@ -22,6 +23,7 @@ from app.core.db_models.google_drive_models import (
     SyncResult,
 )
 from app.core.security import oauth2_scheme
+from app.modules.auth.router import router as auth_router
 from app.modules.auth import service as auth_service
 from app.modules.auth.models import GoogleAccountOut
 from app.modules.google_drive import oauth, services
@@ -36,6 +38,7 @@ from app.modules.google_drive.models import (
     SyncLogCreate,
     SyncLogOut,
 )
+from app.modules.google_drive import router as google_drive_router
 from app.modules.google_drive.router import api_rate_limit, router
 from app.modules.user import service as user_service
 from app.modules.user.models import UserCreate, UserUpdate, validate_password_strength
@@ -231,6 +234,71 @@ def test_new_routes_require_authentication_and_have_no_file_transfer_contract():
     assert "multipart/form-data" not in serialized
 
 
+def test_backup_list_accepts_optional_filters_and_account_uuid(monkeypatch):
+    seen_backups = []
+    seen_logs = []
+
+    def list_backups(_token, _db, filters, *, limit, offset):
+        seen_backups.append((filters, limit, offset))
+        return []
+
+    def list_logs(_token, _db, filters, *, limit, offset):
+        seen_logs.append((filters, limit, offset))
+        return []
+
+    monkeypatch.setattr(google_drive_router, "list_backup_files", list_backups)
+    monkeypatch.setattr(google_drive_router, "list_sync_logs", list_logs)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: FakeDB()
+    app.dependency_overrides[oauth2_scheme] = lambda: "test-noema-token"
+    app.dependency_overrides[api_rate_limit] = lambda: None
+    client = TestClient(app)
+
+    response = client.get(
+        "/google_drive/backups",
+        params={
+            "id_google_account": str(ACCOUNT_ID),
+            "limit": 100,
+            "offset": 0,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == []
+    legacy_response = client.get(
+        "/google_drive/backup_file/list",
+        params={"id_google_account": str(ACCOUNT_ID)},
+    )
+    assert legacy_response.status_code == 200
+    log_response = client.get(
+        "/google_drive/sync_log/list",
+        params={"direction": "upload"},
+    )
+    assert log_response.status_code == 200
+    legacy_log_response = client.get(
+        "/google_drive/sync_log/list",
+        params={"derection": "download"},
+    )
+    assert legacy_log_response.status_code == 200
+    conflicting_log_response = client.get(
+        "/google_drive/sync_log/list",
+        params={"direction": "upload", "derection": "download"},
+    )
+    assert conflicting_log_response.status_code == 422
+    assert conflicting_log_response.json()["detail"]["code"] == (
+        "conflicting_direction_filters"
+    )
+    assert seen_backups == [
+        ({"id_google_account": ACCOUNT_ID}, 100, 0),
+        ({"id_google_account": ACCOUNT_ID}, 100, 0),
+    ]
+    assert seen_logs == [
+        ({"derection": SyncDirection.UPLOAD}, 100, 0),
+        ({"derection": SyncDirection.DOWNLOAD}, 100, 0),
+    ]
+
+
 def test_backup_reads_and_account_writes_hide_cross_user_resources(monkeypatch):
     install_identity(monkeypatch)
     app = FastAPI()
@@ -423,6 +491,98 @@ def test_account_status_never_exposes_legacy_token_columns(monkeypatch):
     assert "refresh_token" not in result.model_dump()
     assert "access_token_enc" not in GoogleAccountOut.model_fields
     assert "refresh_token_enc" not in GoogleAccountOut.model_fields
+
+
+def test_unlink_google_account_requires_backup_metadata_to_be_deleted(monkeypatch):
+    linked = account()
+    monkeypatch.setattr(
+        auth_service,
+        "get_current_user",
+        lambda _token, _db: SimpleNamespace(id=USER_ID),
+    )
+    db = FakeDB(scalar_results=[linked, BACKUP_ID])
+
+    with pytest.raises(HTTPException) as conflict:
+        auth_service.delete_google_account("noema", str(ACCOUNT_ID), db)
+
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail["code"] == "google_account_has_backups"
+    assert db.deleted == []
+    assert db.commits == 0
+
+
+def test_unlink_google_account_handles_backup_insert_race(monkeypatch):
+    linked = account()
+    monkeypatch.setattr(
+        auth_service,
+        "get_current_user",
+        lambda _token, _db: SimpleNamespace(id=USER_ID),
+    )
+    db = FakeDB(scalar_results=[linked, None])
+
+    def fail_commit():
+        raise IntegrityError("delete", {}, Exception("foreign key violation"))
+
+    db.commit = fail_commit
+
+    with pytest.raises(HTTPException) as conflict:
+        auth_service.delete_google_account("noema", str(ACCOUNT_ID), db)
+
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail["code"] == "google_account_has_backups"
+    assert db.rollbacks == 1
+
+
+def test_unlink_google_account_deletes_account_after_backups_are_removed(monkeypatch):
+    linked = account()
+    monkeypatch.setattr(
+        auth_service,
+        "get_current_user",
+        lambda _token, _db: SimpleNamespace(id=USER_ID),
+    )
+    db = FakeDB(scalar_results=[linked, None])
+
+    result = auth_service.delete_google_account("noema", str(ACCOUNT_ID), db)
+
+    assert result is True
+    assert db.deleted == [linked]
+    assert db.commits == 1
+
+
+def test_google_account_delete_route_unlinks_account(monkeypatch):
+    linked = account()
+    monkeypatch.setattr(
+        auth_service,
+        "get_current_user",
+        lambda _token, _db: SimpleNamespace(id=USER_ID),
+    )
+    db = FakeDB(scalar_results=[linked, None])
+    app = FastAPI()
+    app.include_router(auth_router)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[oauth2_scheme] = lambda: "test-noema-token"
+
+    response = TestClient(app).delete(f"/auth/google/delete/{ACCOUNT_ID}")
+
+    assert response.status_code == 200
+    assert response.json() is True
+    assert db.deleted == [linked]
+    assert db.commits == 1
+
+
+def test_unlink_google_account_returns_not_found_for_other_user(monkeypatch):
+    monkeypatch.setattr(
+        auth_service,
+        "get_current_user",
+        lambda _token, _db: SimpleNamespace(id=USER_ID),
+    )
+    db = FakeDB(scalar_results=[None])
+
+    with pytest.raises(HTTPException) as missing:
+        auth_service.delete_google_account("noema", str(ACCOUNT_ID), db)
+
+    assert missing.value.status_code == 404
+    assert db.commits == 0
 
 
 def test_legacy_google_account_get_works_before_schema_migration(monkeypatch):

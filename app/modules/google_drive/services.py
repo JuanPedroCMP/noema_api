@@ -63,6 +63,17 @@ def _account_status(account: GoogleAccount | None) -> GoogleAccountStatusOut:
             checked_at=None,
             error="google_account_not_linked",
         )
+    if account.google_user_id is None:
+        return GoogleAccountStatusOut(
+            account_id=account.id,
+            google_email=None,
+            state="not_linked",
+            drive_appdata_granted=False,
+            sync_available=False,
+            granted_scopes=[],
+            checked_at=None,
+            error="google_account_not_linked",
+        )
     scopes = sorted(set((account.granted_scopes or "").split()))
     state = account.drive_appdata_status or "unknown"
     if not account.is_active:

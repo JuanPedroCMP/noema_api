@@ -3,13 +3,13 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from threading import Lock
 from time import monotonic
-from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ...core.database import get_db
+from ...core.db_models.google_drive_models import SyncDirection
 from ...core.security import get_current_user, oauth2_scheme
 from .models import (
     BackupFileCreate,
@@ -152,7 +152,7 @@ async def refresh_google_status(
     summary="List backup metadata owned by the authenticated user",
 )
 def list_backups(
-    filters: Annotated[BackupFileFilters, Query()],
+    filters: BackupFileFilters = Depends(),
     limit: int = Query(default=100, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=100_000),
     db: Session = Depends(get_db),
@@ -235,7 +235,7 @@ def get_backup_file(
 
 @backup_file_router.get("/list", response_model=list[BackupFileOut])
 def list_backup_file(
-    filters: Annotated[BackupFileFilters, Query()],
+    filters: BackupFileFilters = Depends(),
     limit: int = Query(default=100, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=100_000),
     db: Session = Depends(get_db),
@@ -280,12 +280,20 @@ def get_sync_log(
 
 @sync_log_router.get("/list", response_model=list[SyncLogOut])
 def list_sync_log(
-    filters: Annotated[SyncLogFilters, Query()],
+    filters: SyncLogFilters = Depends(),
+    direction: SyncDirection | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=100_000),
     db: Session = Depends(get_db),
     token: str = Depends(oauth2_scheme),
 ) -> list[SyncLogOut]:
+    if direction is not None:
+        if filters.derection is not None and filters.derection != direction:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"code": "conflicting_direction_filters"},
+            )
+        filters = filters.model_copy(update={"derection": direction})
     return list_sync_logs(
         token,
         db,
