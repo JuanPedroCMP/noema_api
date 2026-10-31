@@ -39,7 +39,11 @@ from app.modules.google_drive.models import (
     SyncLogOut,
 )
 from app.modules.google_drive import router as google_drive_router
-from app.modules.google_drive.router import api_rate_limit, router
+from app.modules.google_drive.router import (
+    api_rate_limit,
+    google_oauth_rate_limit,
+    router,
+)
 from app.modules.user import service as user_service
 from app.modules.user.models import UserCreate, UserUpdate, validate_password_strength
 
@@ -437,6 +441,88 @@ def test_link_status_reflects_verified_granted_and_missing_scopes(
     assert stored.granted_scopes == scopes
     assert stored.access_token_enc is None
     assert stored.refresh_token_enc is None
+
+
+def test_google_account_link_route_verifies_and_returns_status_without_tokens(
+    monkeypatch,
+):
+    install_identity(monkeypatch)
+    verified_tokens = []
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_IDS", "android-client")
+    now = int(datetime.now(timezone.utc).timestamp())
+    identity = {
+        "aud": "android-client",
+        "iss": "https://accounts.google.com",
+        "exp": str(now + 600),
+        "sub": "google-subject",
+        "email": "reader@example.com",
+        "email_verified": "true",
+    }
+    authorization = {
+        "issued_to": "android-client",
+        "user_id": "google-subject",
+        "scope": f"openid {GOOGLE_DRIVE_APPDATA_SCOPE}",
+    }
+
+    async def fetch_token_info(parameter, token_value):
+        verified_tokens.append((parameter, token_value))
+        return identity if parameter == "id_token" else authorization
+
+    monkeypatch.setattr(oauth, "_fetch_token_info", fetch_token_info)
+    db = FakeDB(rows_results=[[]])
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[oauth2_scheme] = lambda: "test-noema-token"
+    app.dependency_overrides[api_rate_limit] = lambda: None
+    app.dependency_overrides[google_oauth_rate_limit] = lambda: None
+
+    response = TestClient(app).post(
+        "/google_drive/account/link",
+        json={
+            "google_id_token": "short-lived-id-token",
+            "google_access_token": "short-lived-access-token",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "granted"
+    assert response.json()["sync_available"] is True
+    assert response.json()["google_email"] == "reader@example.com"
+    assert "short-lived-id-token" not in response.text
+    assert "short-lived-access-token" not in response.text
+    assert verified_tokens == [
+        ("id_token", "short-lived-id-token"),
+        ("access_token", "short-lived-access-token"),
+    ]
+    assert db.commits == 1
+    assert len(db.added) == 1
+    assert db.added[0].access_token_enc is None
+    assert db.added[0].refresh_token_enc is None
+
+
+def test_link_google_account_rejects_identity_owned_by_another_user(monkeypatch):
+    install_identity(monkeypatch)
+    monkeypatch.setattr(
+        services,
+        "verify_google_tokens",
+        lambda _id_token, _access_token: _async_result(
+            ("google-subject", "reader@example.com", [GOOGLE_DRIVE_APPDATA_SCOPE])
+        ),
+    )
+    db = FakeDB(rows_results=[[account(owner=OTHER_USER_ID)]])
+    request = GoogleAccountLinkRequest(
+        google_id_token="google-id-token",
+        google_access_token="google-access-token",
+    )
+
+    with pytest.raises(HTTPException) as unavailable:
+        asyncio.run(services.link_google_account("noema", request, db))
+
+    assert unavailable.value.status_code == 409
+    assert unavailable.value.detail["code"] == "google_account_unavailable"
+    assert db.added == []
+    assert db.commits == 0
 
 
 def _async_result(value):
