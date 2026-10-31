@@ -37,11 +37,15 @@ For direct Drive writes, the app must use the Drive API revision/ETag preconditi
 
 ## Native Google authorization
 
-The app starts Google OAuth with its platform-native public client and PKCE-capable Google SDK flow. Request exactly `https://www.googleapis.com/auth/drive.appdata` for Drive; do not request `drive`, `drive.file`, or other Drive scopes. Identity scopes (`openid`, `email`, `profile`, or the equivalent userinfo scopes) may also be returned by the Google SDK. Do not put a client secret in Flutter.
+Android and iOS use their platform public OAuth clients with the Google Sign-In SDK. Linux and Windows use an installed-app Desktop client: Flutter opens the system browser, receives the response on a temporary loopback listener, and exchanges the authorization code with PKCE. Request exactly `https://www.googleapis.com/auth/drive.appdata` for Drive; do not request `drive`, `drive.file`, or other Drive scopes. Identity scopes (`openid`, `email`, or equivalent userinfo scopes) are also requested to identify the account. Do not put a client secret in Flutter.
 
 The app sends its Google ID token and short-lived Google access token in the JSON body to `POST /api/v1/google_drive/account/link`. Noema verifies issuer, expiry, email verification, configured client audience, identity match, and granted scopes using Google's token-info service. Tokens are held only for verification: Noema does not persist or return them. Application HTTP-client logging removes the token query string when logging token-info requests; do not enable request-body or query-string logging for these routes in a gateway, proxy, APM, or hosting platform. The access token is sent to Google for verification only; it is not used as a Drive proxy. Refresh state after the app obtains a renewed grant and call `POST /api/v1/google_drive/account/status/refresh` after a Drive authorization failure. An invalid/revoked access token marks the linked account `revoked`; transient Google verification failures do not change stored status.
 
 Every request below, including account linking, requires `Authorization: Bearer <Noema access token>`. `GOOGLE_OAUTH_CLIENT_IDS` is the comma-separated set of public OAuth client IDs registered for Android, iOS, and any supported web client. The matching client audience is required for ID-token and access-token verification.
+
+For Linux and Windows, also include the installed-app Desktop client ID in
+`GOOGLE_OAUTH_CLIENT_IDS`; those tokens use the Desktop client as their
+audience.
 
 ### Account status
 
@@ -389,9 +393,9 @@ Recommended manifest fields are `format`, `schema_version`, `snapshot_version`, 
 ## Google Cloud and deployment configuration
 
 1. Enable the Google Drive API and configure the OAuth consent screen and applicable verification/test-user requirements for the app's audience.
-2. Register public OAuth client IDs for each supported Android package/signing certificate and iOS bundle ID. Add a web client only if the product uses one. Use the platform SDK's native authorization-code/PKCE flow; no client secret belongs in Flutter.
+2. Register public OAuth client IDs for each supported Android package/signing certificate and iOS bundle ID, a Web application client for the mobile server audience, and a Desktop app client for Linux/Windows. Android/iOS use Google Sign-In; desktop uses the installed-app browser/loopback/PKCE flow. No client secret belongs in Flutter.
 3. Request only `https://www.googleapis.com/auth/drive.appdata` for Drive access. The old server-side `/auth/google/link` and callback are retired with HTTP 410.
-4. Configure backend `GOOGLE_OAUTH_CLIENT_IDS` as a comma-separated list containing exactly those audiences. No Google client secret is needed by this backend flow.
+4. Configure backend `GOOGLE_OAUTH_CLIENT_IDS` as a comma-separated list containing exactly the legitimate platform audiences, including the Desktop client ID. No Google client secret is needed by this backend flow.
 5. Take and verify a restorable PostgreSQL backup before migration. Apply `migrations/20261031_google_drive_sync_metadata.sql` against the PostgreSQL database **before** deploying the new API or enabling Drive sync. Run it through the deployment's approved secret-safe migration process, for example `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20261031_google_drive_sync_metadata.sql`. It preserves backup/log rows, marks old OAuth state `unknown`, and clears old server-held OAuth token ciphertext because the native direct-transfer flow no longer uses it. Treat this as a one-way credential cleanup; the migration has no reverse script that restores those credentials. Verify the migration before API rollout:
 
    ```sql
