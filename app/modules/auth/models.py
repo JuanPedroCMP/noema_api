@@ -23,8 +23,8 @@ class GoogleAccountOut(BaseModel):
     google_user_id: str | None
     email_google: str | None
     granted_scopes: str | None
-    drive_appdata_status: str
-    scope_checked_at: datetime | None
+    drive_appdata_status: str = "unknown"
+    scope_checked_at: datetime | None = None
     is_active: bool
     expires_at: datetime | None
     last_refresh_at: datetime | None

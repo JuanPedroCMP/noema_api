@@ -489,6 +489,33 @@ def test_legacy_google_account_get_returns_persisted_status_after_migration(
     assert result.scope_checked_at == row["scope_checked_at"]
 
 
+def test_legacy_google_account_get_defaults_missing_sync_metadata(monkeypatch):
+    monkeypatch.setattr(
+        auth_service,
+        "get_current_user",
+        lambda _token, _db: SimpleNamespace(id=USER_ID),
+    )
+    db = FakeDB(
+        execute_row={
+            "id": ACCOUNT_ID,
+            "id_user": USER_ID,
+            "google_user_id": "google-subject",
+            "email_google": "reader@example.com",
+            "granted_scopes": "openid",
+            "is_active": True,
+            "expires_at": None,
+            "last_refresh_at": None,
+            "updated_at": None,
+            "created_at": None,
+        }
+    )
+
+    result = auth_service.get_google_account_out("noema", str(USER_ID), db)
+
+    assert result.drive_appdata_status == "unknown"
+    assert result.scope_checked_at is None
+
+
 def test_backup_metadata_create_retry_is_idempotent_and_owner_checked(monkeypatch):
     install_identity(monkeypatch)
     payload = create_payload()
