@@ -9,13 +9,16 @@ The user authenticates to Noema with its JWT, calls `POST
 Google redirects to `GET /api/v1/google_drive/oauth/callback`; the backend
 validates one-time `state`, `nonce`, and PKCE, exchanges the code, encrypts
 the refresh token with the configured key version, and stores it in
-`app_auth.google_account`. The app then calls `POST
-/api/v1/google_drive/account/complete` with the state. Other devices only
-call `GET /api/v1/google_drive/account/status`; they reuse the same account
-authorization and never reauthorize Google.
+`app_auth.google_account`. The callback displays a completion page; the app
+polls `POST /api/v1/google_drive/account/complete` with the state until the
+authorization succeeds or returns a specific failure. Completion polling is
+idempotent. Other devices only call `GET
+/api/v1/google_drive/account/status`; they reuse the same account authorization
+and never reauthorize Google.
 
 The backend uses only `https://www.googleapis.com/auth/drive.appdata`. Refresh
-is centralized, uses a per-account process lock plus a database row lock,
+is centralized, uses a PostgreSQL transaction-level advisory lock plus a
+database row lock,
 refreshes before expiry margin, rotates refresh tokens when Google returns
 one, and marks the account revoked on `invalid_grant`. Tokens are never
 included in response models, logs, sync metadata, or errors.
@@ -25,8 +28,10 @@ Snapshot transfer is through `POST /api/v1/google_drive/sync/upload`,
 /api/v1/google_drive/sync/files`, and `DELETE
 /api/v1/google_drive/sync/files/{backup_id}`. Uploads validate the
 bounded size, SHA-256 content hash and strict manifest before the metadata
-row is marked completed. Clients use `X-Idempotency-Key` semantics through
-the request field and `If-Match` for conditional deletion/update. Large
+row is marked completed. Updates carry `backup_id`, `expected_drive_version`,
+and `expected_content_hash`; the backend checks the current Drive revision and
+uses `If-Match` before replacing it. New uploads and updates use the same
+resumable transfer route and an idempotency key. Large
 payloads should be submitted as resumable operations using
 `POST /api/v1/google_drive/sync/operations`; operation records are
 `pending`, `uploading`, `completed`, or `failed` and are safe to retry. The
@@ -51,8 +56,10 @@ retiring the old version.
 ### Migration and rollback
 
 Take a PostgreSQL backup and apply
-`migrations/20261101_google_drive_server_oauth.sql` before enabling the new
-routes. The migration is additive and does not delete existing
+`migrations/20261031_google_drive_sync_metadata.sql`,
+`migrations/20261101_google_drive_server_oauth.sql`, and
+`migrations/20261102_google_drive_oauth_completion.sql` in order before enabling
+the new routes. The migrations are additive and do not delete existing
 `backup_file` rows. Roll back application code by disabling the new routes
 and redeploying the previous version; retain the new tables and columns.
 Do not restore or export refresh-token ciphertext during rollback. If the
@@ -103,7 +110,8 @@ Typical Flutter sequence:
 
 1. Sign in to Noema and keep the Noema JWT separate from Google credentials.
 2. Call `/google_drive/oauth/start` and open its returned authorization URL.
-3. After the controlled callback/deep link, call `/google_drive/account/complete`.
+3. Keep the app open while the browser returns to its completion page; poll
+   `/google_drive/account/complete` with the OAuth state.
 4. Upload, list, download, and delete through `/google_drive/sync/*`; send an idempotency key for every operation.
 5. On a revision or ETag conflict, refresh metadata and ask the user to choose a merge strategy; the backend never overwrites a newer remote revision silently.
 
@@ -118,7 +126,8 @@ The backend applies Drive revision and ETag preconditions before update or delet
 ## Server-side Google authorization
 
 The backend owns the OAuth client and secret. Flutter opens the authorization
-URL returned by `/oauth/start` and handles only the completion deep link.
+URL returned by `/oauth/start` and polls the authenticated completion endpoint;
+no deep-link handler or Google token is needed in the app.
 Request exactly `https://www.googleapis.com/auth/drive.appdata`; the backend
 validates identity and scope and stores only an encrypted refresh token.
 
@@ -295,7 +304,7 @@ List query parameters support exact-match filters `id`, `id_google_account`, `id
 }
 ```
 
-`expected_drive_version` and `expected_content_hash` are required keys; use JSON `null` when the version/hash in the existing metadata is null. The backend compares both values atomically while locking the owned metadata row. They represent the Noema metadata state last read by the app; the backend cannot query or validate the current Drive revision itself. Drive-side conditional writes are still necessary to prevent an external Drive update between the app's read and its direct write. The PUT updates versions, hash, size, state, and manifest; it does not change the linked account, device, Drive file ID, or local reference.
+`expected_drive_version` and `expected_content_hash` are required keys; use JSON `null` when the version/hash in the existing metadata is null. The backend compares both values while locking the owned metadata row. For content updates, `/sync/upload` also checks the current Drive revision and uses an ETag precondition before replacing bytes; a stale or unavailable revision returns `409` without overwriting the remote file. The metadata-only PUT does not write Drive content.
 
 The idempotency key identifies the logical API mutation, not the snapshot. Reuse it byte-for-byte only for retries of the identical request. A successfully replayed PUT returns the record's current representation without applying the mutation again; if the request has changed, choose a new key. A POST retry returns its existing record (HTTP status remains `201`). Reusing a key for a different request returns `409 idempotency_key_reused`.
 
@@ -355,7 +364,7 @@ Successful `200 OK` response:
 }
 ```
 
-`DELETE /api/v1/google_drive/backups/{backup_id}` returns `{"deleted":true,"drive_file_deleted":false}`. It removes only the Noema metadata row. The app deletes a Drive object directly and then removes the metadata.
+`DELETE /api/v1/google_drive/backups/{backup_id}` returns `{"deleted":true,"drive_file_deleted":false}` and removes only the Noema metadata row. Use `DELETE /api/v1/google_drive/sync/files/{backup_id}` when the Drive object itself must be deleted.
 
 The DELETE operation is ownership-scoped and returns `404` for missing or foreign records. If the user wants to unlink/switch Google accounts, first delete all metadata rows tied to the old account, then use the existing `DELETE /api/v1/auth/google/delete/{id}` route for that owned account; this route also only unlinks Noema and never deletes Drive files. Unlink returns `409 google_account_has_backups` while backup metadata still references the account, so those rows cannot accidentally be associated with a different Google identity. Link does not silently replace a different account.
 
@@ -454,10 +463,10 @@ Recommended manifest fields are `format`, `schema_version`, `snapshot_version`, 
 ## Google Cloud and deployment configuration
 
 1. Enable the Google Drive API and configure the OAuth consent screen and applicable verification/test-user requirements for the app's audience.
-2. Register public OAuth client IDs for each supported Android package/signing certificate and iOS bundle ID, a Web application client for the mobile server audience, and a Desktop app client for Linux/Windows. Android/iOS use Google Sign-In; desktop uses the installed-app browser/loopback/PKCE flow. No client secret belongs in Flutter.
+2. Register one Google OAuth **Web application** client and configure its exact HTTPS callback URL (`https://<api-host>/api/v1/google_drive/oauth/callback`) in Google Cloud. No platform-specific Google Sign-In client or desktop OAuth secret is used by this flow.
 3. Request only `https://www.googleapis.com/auth/drive.appdata` for Drive access. The old server-side `/auth/google/link` and callback are retired with HTTP 410.
-4. Configure backend `GOOGLE_OAUTH_CLIENT_IDS` as a comma-separated list containing exactly the legitimate platform audiences, including the Desktop client ID. No Google client secret is needed by this backend flow.
-5. Take and verify a restorable PostgreSQL backup before migration. Apply `migrations/20261031_google_drive_sync_metadata.sql` against the PostgreSQL database **before** deploying the new API or enabling Drive sync. Run it through the deployment's approved secret-safe migration process, for example `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20261031_google_drive_sync_metadata.sql`. It preserves backup/log rows, marks old OAuth state `unknown`, and clears old server-held OAuth token ciphertext because the native direct-transfer flow no longer uses it. Treat this as a one-way credential cleanup; the migration has no reverse script that restores those credentials. Verify the migration before API rollout:
+4. Configure backend `GOOGLE_OAUTH_REDIRECT_URIS` with the exact HTTPS callback URL. The client secret and token-encryption key stay in the backend secret manager.
+5. Take and verify a restorable PostgreSQL backup before migration. Apply `migrations/20261031_google_drive_sync_metadata.sql`, `migrations/20261101_google_drive_server_oauth.sql`, and `migrations/20261102_google_drive_oauth_completion.sql` in order, before enabling the new client flow. Run them through the deployment's approved secret-safe migration process. They preserve backup/log metadata; follow the credential cleanup instructions in the migrations and verify every schema change before API rollout.
 
    ```sql
    SELECT
@@ -474,7 +483,7 @@ Recommended manifest fields are `format`, `schema_version`, `snapshot_version`, 
 
    The result must be `true`. If the application has already been deployed and returns `UndefinedColumn` for `drive_appdata_status`, apply the migration immediately, verify readiness, then retry the request. The legacy `GET /api/v1/auth/google/get/{identificator}` temporarily remains usable before migration and reports Drive state as `unknown`; after migration it returns the persisted state. The new Drive sync endpoints require the migration.
 
-Existing environment requirements remain: database connection settings (`user`, `password`, `host`, `port`, `dbname`), Noema `secret_key` for JWTs, and the existing API encryption key for other modules that still use it. The Google Drive sync path introduces no new server secret. Reauthorize Google on-device after rollout; pre-migration Google grants may be revoked by the user in Google Account security settings.
+Existing environment requirements remain: database connection settings (`user`, `password`, `host`, `port`, `dbname`) and Noema `secret_key` for JWTs. Google Drive adds a Web OAuth client, exact callback allowlist, and token-encryption key as described above. Existing native grants are not transferred to the backend; each account must authorize once through the updated Noema app after rollout.
 
 The retired native routes return `410 Gone` where applicable. They are not part of the official client flow; all new clients use `/api/v1/google_drive/oauth/*` and `/api/v1/google_drive/sync/*`.
 

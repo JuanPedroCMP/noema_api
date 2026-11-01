@@ -22,7 +22,12 @@ from fastapi import HTTPException, status
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from ...core.db_models.google_drive_models import GoogleAccount, OAuthState, SyncOperation
+from ...core.db_models.google_drive_models import (
+    BackupFile,
+    GoogleAccount,
+    OAuthState,
+    SyncOperation,
+)
 from ...core.security import get_current_user
 from .models import GOOGLE_DRIVE_APPDATA_SCOPE
 
@@ -63,6 +68,25 @@ def _allowed_redirect_uris() -> set[str]:
 
 def _hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def oauth_cancel(state: str, db: Session, error: str | None = None) -> None:
+    row = db.scalar(
+        select(OAuthState).where(
+            OAuthState.state_hash == _hash(state),
+            OAuthState.consumed_at.is_(None),
+            OAuthState.expires_at > datetime.now(timezone.utc),
+        ).with_for_update()
+    )
+    if row is None:
+        raise HTTPException(status_code=400, detail={"code": "invalid_oauth_state"})
+    row.consumed_at = datetime.now(timezone.utc)
+    row.error_code = (
+        "oauth_authorization_cancelled"
+        if error == "access_denied"
+        else "google_oauth_provider_error"
+    )
+    db.commit()
 
 
 def _key(version: str) -> bytes:
@@ -223,6 +247,20 @@ async def oauth_callback(code: str, state: str, db: Session) -> dict[str, str]:
     )
     if conflicting is not None:
         raise HTTPException(status_code=409, detail={"code": "google_account_unavailable"})
+    if account is not None and account.google_user_id not in {
+        None,
+        str(identity["sub"]),
+    }:
+        retained_backups = db.scalar(
+            select(BackupFile.id)
+            .where(BackupFile.id_google_account == account.id)
+            .limit(1)
+        )
+        if retained_backups is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "google_account_already_linked"},
+            )
     now = datetime.now(timezone.utc)
     if refresh_token is None and account is None:
         raise HTTPException(status_code=502, detail={"code": "google_refresh_token_missing"})
@@ -264,13 +302,14 @@ async def refresh_access_token(account: GoogleAccount, db: Session) -> str:
             status_code=503,
             detail={"code": "distributed_lock_unavailable"},
         )
+    lock_key = int.from_bytes(
+        hashlib.sha256(str(account.id).encode("ascii")).digest()[:8],
+        byteorder="big",
+        signed=True,
+    )
     db.execute(
-        text(
-            "SELECT pg_advisory_xact_lock("
-            "('x' || substr(replace(:account_id, '-', ''), 1, 16))::bit(64)::bigint, "
-            "('x' || substr(replace(:account_id, '-', ''), 17, 16))::bit(64)::bigint)"
-        ),
-        {"account_id": str(account.id)},
+        text("SELECT pg_advisory_xact_lock(CAST(:lock_key AS BIGINT))"),
+        {"lock_key": lock_key},
     )
     locked = db.scalar(
         select(GoogleAccount).where(GoogleAccount.id == account.id).with_for_update()

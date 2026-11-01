@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+import re
 from threading import Lock
 from time import monotonic
 from typing import Any
@@ -16,8 +17,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import StreamingResponse
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from ...core.database import get_db
@@ -29,7 +29,6 @@ from .models import (
     BackupFileOut,
     BackupMetadataCreate,
     BackupMetadataUpdate,
-    GoogleAccountLinkRequest,
     GoogleAccountStatusOut,
     SyncLogCreate,
     SyncLogFilters,
@@ -47,10 +46,8 @@ from .services import (
     create_sync_log,
     delete_backup_metadata,
     get_google_account_status,
-    link_google_account,
     list_backup_files,
     list_sync_logs,
-    refresh_google_account_status,
     update_backup_metadata,
 )
 from .worker import (
@@ -61,6 +58,7 @@ from .worker import (
     unlock_sync_target,
 )
 from .server_oauth import (
+    oauth_cancel,
     oauth_callback,
     oauth_start,
     refresh_access_token,
@@ -174,16 +172,41 @@ def oauth_start_endpoint(
 
 @public_oauth_router.get("/callback")
 async def oauth_callback_endpoint(
-    code: str,
     state: str,
+    code: str | None = None,
+    error: str | None = None,
     db: Session = Depends(get_db),
-) -> RedirectResponse:
-    # The browser callback contains only a one-time authorization code and state.
-    result = await oauth_callback(code, state, db)
-    redirect_uri = result["redirect_uri"]
-    return RedirectResponse(
-        url=f"{redirect_uri}?oauth=completed&state={state}",
-        status_code=status.HTTP_303_SEE_OTHER,
+) -> HTMLResponse:
+    if error is not None:
+        oauth_cancel(state, db, error)
+        return HTMLResponse(
+            "<!doctype html><html><meta charset='utf-8'><title>Noema</title>"
+            "<p>A autorização foi cancelada. Você pode fechar esta página e "
+            "voltar ao Noema.</p></html>",
+            status_code=200,
+        )
+    if not code:
+        raise HTTPException(status_code=400, detail={"code": "google_oauth_code_missing"})
+    try:
+        await oauth_callback(code, state, db)
+    except HTTPException:
+        db.rollback()
+        try:
+            oauth_cancel(state, db, "oauth_error")
+        except HTTPException as state_error:
+            detail = state_error.detail if isinstance(state_error.detail, dict) else {}
+            if detail.get("code") != "invalid_oauth_state":
+                raise
+        return HTMLResponse(
+            "<!doctype html><html><meta charset='utf-8'><title>Noema</title>"
+            "<p>Não foi possível concluir a autorização. Volte ao Noema para "
+            "ver os detalhes e tentar novamente.</p></html>",
+            status_code=200,
+        )
+    return HTMLResponse(
+        "<!doctype html><html><meta charset='utf-8'><title>Noema</title>"
+        "<p>Google Drive conectado. Volte ao Noema para continuar.</p></html>",
+        status_code=200,
     )
 
 
@@ -207,21 +230,28 @@ def complete_oauth(
     token: str = Depends(oauth2_scheme),
 ) -> GoogleAccountStatusOut:
     user = get_current_user(token, db)
+    import hashlib
+
     state_row = db.scalar(
         select(OAuthState)
         .where(
-            OAuthState.state_hash
-            == __import__("hashlib").sha256(payload.state.encode()).hexdigest(),
+            OAuthState.state_hash == hashlib.sha256(payload.state.encode()).hexdigest(),
             OAuthState.id_user == user.id,
         )
         .with_for_update()
     )
     if state_row is None or state_row.consumed_at is None:
+        if state_row is not None and state_row.expires_at <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=410, detail={"code": "oauth_state_expired"})
         raise HTTPException(status_code=409, detail={"code": "oauth_completion_pending"})
-    if state_row.completion_consumed_at is not None:
-        raise HTTPException(status_code=409, detail={"code": "oauth_completion_reused"})
-    state_row.completion_consumed_at = datetime.now(timezone.utc)
-    db.commit()
+    if state_row.error_code:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": state_row.error_code},
+        )
+    if state_row.completion_consumed_at is None:
+        state_row.completion_consumed_at = datetime.now(timezone.utc)
+        db.commit()
     return get_google_account_status(token, db)
 
 
@@ -317,6 +347,9 @@ async def upload_backup_snapshot(
     content_hash: str = Form(...),
     manifest: str = Form(...),
     idempotency_key: str = Form(...),
+    backup_id: UUID | None = Form(default=None),
+    expected_drive_version: str | None = Form(default=None),
+    expected_content_hash: str | None = Form(default=None),
     upload: UploadFile = File(...),
     db: Session = Depends(get_db),
     token: str = Depends(oauth2_scheme),
@@ -325,6 +358,13 @@ async def upload_backup_snapshot(
         parsed_manifest = SnapshotManifest.model_validate_json(manifest)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail={"code": "snapshot_validation_failed"}) from exc
+    if (
+        not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", local_ref)
+        or not re.fullmatch(r"[A-Za-z0-9._:-]{16,128}", idempotency_key)
+        or not re.fullmatch(r"(?:sha256:)?[A-Fa-f0-9]{16,128}", content_hash)
+        or len(snapshot_version) > 128
+    ):
+        raise HTTPException(status_code=422, detail={"code": "snapshot_validation_failed"})
     user = get_current_user(token, db)
     if db.scalar(
         select(GoogleAccount).where(
@@ -333,37 +373,81 @@ async def upload_backup_snapshot(
         )
     ) is None:
         raise HTTPException(status_code=404, detail={"code": "resource_not_found"})
-    sync_lock = lock_sync_target(db, id_google_account, local_ref)
-    operation = create_or_get_operation(
-        db,
-        id_user=user.id,
-        id_google_account=id_google_account,
-        id_device=None,
-        local_ref=local_ref,
-        operation_kind="upload",
-        idempotency_key=idempotency_key,
-        payload={
-            "snapshot_version": snapshot_version,
-            "content_hash": content_hash,
-            "manifest": parsed_manifest.model_dump(mode="json"),
-        },
+    has_revision_fields = (
+        expected_drive_version is not None,
+        expected_content_hash is not None,
     )
-    if operation.state == "completed" and operation.id_backup_file:
-        backup = db.get(BackupFile, operation.id_backup_file)
-        if backup is not None:
-            unlock_sync_target(db, sync_lock)
-            return backup
-    operation.state = "uploading"
-    operation.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    try:
-        return await upload_snapshot(
-            token, id_google_account, local_ref, snapshot_version, content_hash,
-            parsed_manifest, idempotency_key, upload, db, operation.id,
+    if (
+        (backup_id is None and any(has_revision_fields))
+        or (backup_id is not None and not all(has_revision_fields))
+        or (
+            backup_id is not None
+            and (
+                not expected_drive_version
+                or len(expected_drive_version) > 128
+                or not expected_content_hash
+                or not re.fullmatch(
+                    r"(?:sha256:)?[A-Fa-f0-9]{16,128}",
+                    expected_content_hash,
+                )
+            )
         )
-    except HTTPException as exc:
-        mark_failed(db, operation.id, f"upload_http_{exc.status_code}", retryable=exc.status_code >= 500)
-        raise
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "backup_revision_fields_required"},
+        )
+    sync_lock = lock_sync_target(db, id_google_account, local_ref)
+    try:
+        operation = create_or_get_operation(
+            db,
+            id_user=user.id,
+            id_google_account=id_google_account,
+            id_device=None,
+            local_ref=local_ref,
+            operation_kind="upload",
+            idempotency_key=idempotency_key,
+            payload={
+                "backup_id": str(backup_id) if backup_id else None,
+                "expected_drive_version": expected_drive_version,
+                "expected_content_hash": expected_content_hash,
+                "snapshot_version": snapshot_version,
+                "content_hash": content_hash,
+                "manifest": parsed_manifest.model_dump(mode="json"),
+            },
+            backup_id=backup_id,
+        )
+        if operation.state == "completed" and operation.id_backup_file:
+            backup = db.get(BackupFile, operation.id_backup_file)
+            if backup is not None:
+                return backup
+        operation.state = "uploading"
+        operation.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        try:
+            return await upload_snapshot(
+                token,
+                id_google_account,
+                local_ref,
+                snapshot_version,
+                content_hash,
+                parsed_manifest,
+                idempotency_key,
+                upload,
+                db,
+                operation.id,
+                backup_id,
+                expected_drive_version,
+                expected_content_hash,
+            )
+        except HTTPException as exc:
+            mark_failed(
+                db,
+                operation.id,
+                f"upload_http_{exc.status_code}",
+                retryable=exc.status_code >= 500,
+            )
+            raise
     finally:
         unlock_sync_target(db, sync_lock)
 
@@ -402,31 +486,34 @@ async def delete_drive_backup_file(
 
 @oauth2_account_router.post(
     "/link",
-    response_model=GoogleAccountStatusOut,
-    status_code=status.HTTP_200_OK,
-    summary="Link a native Google authorization without storing its tokens",
+    status_code=status.HTTP_410_GONE,
+    summary="Retired native Google linking endpoint",
+    deprecated=True,
     dependencies=[Depends(google_oauth_rate_limit)],
 )
-async def google_account_link(
-    link_request: GoogleAccountLinkRequest,
-    db: Session = Depends(get_db),
+def google_account_link(
     token: str = Depends(oauth2_scheme),
-) -> GoogleAccountStatusOut:
-    return await link_google_account(token, link_request, db)
+) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={"code": "server_oauth_required"},
+    )
 
 
 @oauth2_account_router.post(
     "/status/refresh",
-    response_model=GoogleAccountStatusOut,
-    summary="Re-check the currently linked Google authorization",
+    status_code=status.HTTP_410_GONE,
+    summary="Retired client-token refresh endpoint",
+    deprecated=True,
     dependencies=[Depends(google_oauth_rate_limit)],
 )
-async def refresh_google_status(
-    link_request: GoogleAccountLinkRequest,
-    db: Session = Depends(get_db),
+def refresh_google_status(
     token: str = Depends(oauth2_scheme),
-) -> GoogleAccountStatusOut:
-    return await refresh_google_account_status(token, link_request, db)
+) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={"code": "server_oauth_required"},
+    )
 
 
 @router.get(

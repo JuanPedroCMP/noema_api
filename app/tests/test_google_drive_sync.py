@@ -19,6 +19,7 @@ from app.core.db_models.google_drive_models import (
     BackupOperationIdempotency,
     BackupOperationState,
     ConflictStrategy,
+    OAuthState,
     SyncDirection,
     SyncResult,
 )
@@ -27,6 +28,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.auth import service as auth_service
 from app.modules.auth.models import GoogleAccountOut
 from app.modules.google_drive import oauth, services
+from app.modules.google_drive import server_oauth
 from app.modules.google_drive import worker as google_drive_worker
 from app.modules.google_drive.models import (
     GOOGLE_DRIVE_APPDATA_SCOPE,
@@ -89,8 +91,10 @@ class FakeDB:
     def scalar(self, _statement):
         return self.scalar_results.pop(0) if self.scalar_results else None
 
-    def execute(self, statement):
-        self.executed_statements.append(statement)
+    def execute(self, statement, params=None):
+        self.executed_statements.append(
+            (statement, params) if params is not None else statement
+        )
         if getattr(statement, "is_delete", False):
             return SimpleNamespace(rowcount=1)
         return MappingResult(
@@ -291,6 +295,43 @@ def test_snapshot_upload_accepts_multipart_form_fields():
     assert response.json()["detail"]["code"] == "snapshot_validation_failed"
 
 
+def test_snapshot_upload_rejects_partial_revision_fields(monkeypatch):
+    app = FastAPI()
+    app.include_router(transfer_router)
+    app.dependency_overrides[get_db] = lambda: FakeDB(scalar_results=[account()])
+    app.dependency_overrides[oauth2_scheme] = lambda: "test-noema-token"
+    app.dependency_overrides[api_rate_limit] = lambda: None
+    monkeypatch.setattr(
+        google_drive_router,
+        "get_current_user",
+        lambda _token, _db: SimpleNamespace(id=USER_ID),
+    )
+    response = TestClient(app).post(
+        "/google_drive/sync/upload",
+        data={
+            "id_google_account": str(ACCOUNT_ID),
+            "local_ref": "primary-snapshot",
+            "snapshot_version": "17",
+            "content_hash": "5c2d7f0bb5921471021c99efb2e357d5",
+            "manifest": (
+                '{"format":"noema-snapshot","schema_version":1,'
+                '"snapshot_version":"17","created_at":"2026-10-31T00:00:00Z",'
+                '"installation_id":"install-7d2c",'
+                '"included_categories":["local_library"],'
+                '"excluded_categories":["global_preferences"],'
+                '"counts":{"local_library":12},'
+                '"hashes":{"local_library":"sha256:5c2d7f0bb5921471021c99efb2e357d5"}}'
+            ),
+            "idempotency_key": "37d19871-7e6a-4b1f-bcff-53dc0d397a44",
+            "expected_drive_version": "42",
+        },
+        files={"upload": ("snapshot.json", b"{}", "application/json")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "backup_revision_fields_required"
+
+
 def test_sync_advisory_lock_uses_postgres_int32_key_pair():
     executed = []
     db = SimpleNamespace(
@@ -305,7 +346,38 @@ def test_sync_advisory_lock_uses_postgres_int32_key_pair():
 
     google_drive_worker.unlock_sync_target(db, key)
     assert "pg_advisory_unlock(:first, :second)" in str(executed[1][0])
-    assert executed[1][1] == {"first": key[0], "second": key[1]}
+
+
+def test_refresh_token_lock_uses_supported_single_bigint_signature(monkeypatch):
+    account_row = SimpleNamespace(
+        id=ACCOUNT_ID,
+        refresh_token_enc="encrypted",
+        refresh_token_key_version="v1",
+    )
+    db = FakeDB(scalar_results=[account_row])
+    db.bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+    async def exchange(_account, _db):
+        return "access-token"
+
+    monkeypatch.setattr(server_oauth, "_exchange_refresh", exchange)
+    server_oauth._access_tokens.pop(ACCOUNT_ID, None)
+
+    assert asyncio.run(server_oauth.refresh_access_token(account_row, db)) == "access-token"
+    assert "pg_advisory_xact_lock(CAST(:lock_key AS BIGINT))" in str(
+        db.executed_statements[0][0]
+    )
+
+
+def test_oauth_cancel_marks_state_with_safe_error_code():
+    state_row = SimpleNamespace(consumed_at=None, error_code=None)
+    db = FakeDB(scalar_results=[state_row])
+
+    server_oauth.oauth_cancel("a" * 40, db, "access_denied")
+
+    assert state_row.consumed_at is not None
+    assert state_row.error_code == "oauth_authorization_cancelled"
+    assert db.commits == 1
 
 
 def test_backup_list_accepts_optional_filters_and_account_uuid(monkeypatch):
@@ -513,36 +585,9 @@ def test_link_status_reflects_verified_granted_and_missing_scopes(
     assert stored.refresh_token_enc is None
 
 
-def test_google_account_link_route_verifies_and_returns_status_without_tokens(
-    monkeypatch,
-):
-    install_identity(monkeypatch)
-    verified_tokens = []
-    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_IDS", "android-client")
-    now = int(datetime.now(timezone.utc).timestamp())
-    identity = {
-        "aud": "android-client",
-        "iss": "https://accounts.google.com",
-        "exp": str(now + 600),
-        "sub": "google-subject",
-        "email": "reader@example.com",
-        "email_verified": "true",
-    }
-    authorization = {
-        "issued_to": "android-client",
-        "user_id": "google-subject",
-        "scope": f"openid {GOOGLE_DRIVE_APPDATA_SCOPE}",
-    }
-
-    async def fetch_token_info(parameter, token_value):
-        verified_tokens.append((parameter, token_value))
-        return identity if parameter == "id_token" else authorization
-
-    monkeypatch.setattr(oauth, "_fetch_token_info", fetch_token_info)
-    db = FakeDB(rows_results=[[]])
+def test_native_google_link_route_is_retired_without_token_schema():
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[oauth2_scheme] = lambda: "test-noema-token"
     app.dependency_overrides[api_rate_limit] = lambda: None
     app.dependency_overrides[google_oauth_rate_limit] = lambda: None
@@ -555,20 +600,11 @@ def test_google_account_link_route_verifies_and_returns_status_without_tokens(
         },
     )
 
-    assert response.status_code == 200
-    assert response.json()["state"] == "granted"
-    assert response.json()["sync_available"] is True
-    assert response.json()["google_email"] == "reader@example.com"
-    assert "short-lived-id-token" not in response.text
-    assert "short-lived-access-token" not in response.text
-    assert verified_tokens == [
-        ("id_token", "short-lived-id-token"),
-        ("access_token", "short-lived-access-token"),
-    ]
-    assert db.commits == 1
-    assert len(db.added) == 1
-    assert db.added[0].access_token_enc is None
-    assert db.added[0].refresh_token_enc is None
+    schema = app.openapi()
+    link_operation = schema["paths"]["/google_drive/account/link"]["post"]
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "server_oauth_required"
+    assert "requestBody" not in link_operation
 
 
 def test_link_google_account_rejects_identity_owned_by_another_user(monkeypatch):

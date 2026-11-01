@@ -82,7 +82,15 @@ def create_or_get_operation(
     payload: dict[str, Any],
     backup_id: UUID | None = None,
 ) -> SyncOperation:
-    fingerprint = request_hash(operation_kind, payload)
+    fingerprint = request_hash(
+        operation_kind,
+        {
+            "id_google_account": str(id_google_account),
+            "id_device": str(id_device) if id_device else None,
+            "local_ref": local_ref,
+            "payload": payload,
+        },
+    )
     existing = db.scalar(
         select(SyncOperation).where(
             SyncOperation.id_user == id_user,
@@ -177,7 +185,7 @@ async def process_operation(db: Session, operation_id: UUID) -> SyncOperation | 
                 "/files",
                 params={
                     "spaces": "appDataFolder",
-                    "fields": "files(id,name,version,etag,size,appProperties)",
+                    "fields": "files(id,name,version,size,appProperties)",
                 },
             )
             if response.status_code >= 400:
@@ -199,7 +207,7 @@ async def process_operation(db: Session, operation_id: UUID) -> SyncOperation | 
                 db,
                 "GET",
                 f"/files/{backup.drive_file_id}",
-                params={"fields": "id,parents,appProperties,version,etag,size"},
+                params={"fields": "id,parents,appProperties,version,size"},
             )
             remote = metadata.json() if metadata.status_code < 400 else {}
             if (
@@ -219,7 +227,7 @@ async def process_operation(db: Session, operation_id: UUID) -> SyncOperation | 
                 }
             elif operation.operation_kind == "metadata":
                 backup.drive_version = str(remote.get("version", backup.drive_version))
-                backup.drive_etag = remote.get("etag", backup.drive_etag)
+                backup.drive_etag = metadata.headers.get("etag") or backup.drive_etag
                 backup.updated_at = datetime.now(timezone.utc)
             else:
                 expected = payload.get("if_match") or backup.drive_etag or backup.drive_version

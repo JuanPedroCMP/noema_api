@@ -196,6 +196,7 @@ class OAuthState(Base):
     expires_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), nullable=False)
     consumed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
     completion_consumed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
+    error_code: Mapped[Optional[str]] = mapped_column(String(64))
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
 
 
