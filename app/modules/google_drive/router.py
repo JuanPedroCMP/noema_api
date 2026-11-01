@@ -258,9 +258,7 @@ async def create_sync_operation(
             status_code=422,
             detail={"code": "use_sync_upload_for_upload_operations"},
         )
-    request_payload = {
-        "backup_id": str(payload.backup_id) if payload.backup_id else None
-    }
+    request_payload = payload.model_dump(mode="json", exclude={"idempotency_key"})
     operation = create_or_get_operation(
         db,
         id_user=user.id,

@@ -56,6 +56,15 @@ async def upload_snapshot(
         BackupFile.idempotency_key == idempotency_key,
     ))
     if existing is not None:
+        if (
+            existing.local_ref != local_ref
+            or existing.snapshot_version != snapshot_version
+            or existing.content_hash.lower() != content_hash.lower()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "idempotency_key_reused"},
+            )
         return existing
     digest = hashlib.sha256()
     size = 0
