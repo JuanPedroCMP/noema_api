@@ -13,7 +13,7 @@ def retired_server_side_google_oauth(
         status_code=status.HTTP_410_GONE,
         detail={
             "code": "google_oauth_flow_retired",
-            "message": "Use the native Google SDK and POST the verified grant to /api/v1/google_drive/account/link.",
+            "message": "Use the server-side flow at /api/v1/google_drive/oauth/start.",
         },
     )
 

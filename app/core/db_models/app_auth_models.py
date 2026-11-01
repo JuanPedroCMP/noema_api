@@ -60,6 +60,7 @@ class GoogleAccount(Base):
     email_google: Mapped[Optional[str]] = mapped_column(String(254))
     access_token_enc: Mapped[Optional[str]] = mapped_column(Text)
     refresh_token_enc: Mapped[Optional[str]] = mapped_column(Text)
+    refresh_token_key_version: Mapped[Optional[str]] = mapped_column(String(32))
     granted_scopes: Mapped[Optional[str]] = mapped_column(String(2048))
     drive_appdata_status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'unknown'")
@@ -68,6 +69,7 @@ class GoogleAccount(Base):
     is_active: Mapped[Optional[bool]] = mapped_column(Boolean, server_default=text('true'))
     expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
     last_refresh_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
+    refresh_lock_until: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
 

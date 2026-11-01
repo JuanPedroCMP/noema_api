@@ -348,6 +348,7 @@ def _create_values(data: BackupMetadataCreate | BackupFileCreate) -> dict[str, A
         "drive_file_id": data.drive_file_id,
         "local_ref": data.local_ref,
         "drive_version": data.drive_version,
+        "drive_etag": data.drive_etag,
         "snapshot_version": data.snapshot_version,
         "content_hash": data.content_hash,
         "size_bytes": data.size_bytes,
@@ -517,6 +518,7 @@ def update_backup_metadata(
         )
 
     backup.drive_version = data.drive_version
+    backup.drive_etag = data.drive_etag
     backup.snapshot_version = data.snapshot_version
     backup.content_hash = data.content_hash
     backup.size_bytes = data.size_bytes

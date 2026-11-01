@@ -3,9 +3,12 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from threading import Lock
 from time import monotonic
+from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import Response
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from ...core.database import get_db
@@ -22,6 +25,11 @@ from .models import (
     SyncLogCreate,
     SyncLogFilters,
     SyncLogOut,
+    OAuthCompleteRequest,
+    OAuthStartRequest,
+    SyncOperationCreate,
+    SyncOperationOut,
+    AccountRefreshOut,
 )
 from .services import (
     create_backup_metadata,
@@ -35,6 +43,18 @@ from .services import (
     refresh_google_account_status,
     update_backup_metadata,
 )
+from .server_oauth import oauth_callback, oauth_start, refresh_access_token
+from .transfer import (
+    delete_drive_file,
+    download_snapshot,
+    list_drive_files,
+    upload_snapshot,
+)
+from ...core.db_models.google_drive_models import GoogleAccount, OAuthState, SyncOperation
+from sqlalchemy import select
+from uuid import uuid4
+import hashlib
+from datetime import datetime, timezone
 from .services import (
     get_backup_file as service_get_backup_file,
 )
@@ -103,6 +123,12 @@ router = APIRouter(
     tags=["Google Drive sync"],
     dependencies=[Depends(api_rate_limit)],
 )
+public_oauth_router = APIRouter(prefix="/google_drive/oauth", tags=["Google Drive OAuth"])
+transfer_router = APIRouter(
+    prefix="/google_drive",
+    tags=["Google Drive transfer"],
+    dependencies=[Depends(api_rate_limit)],
+)
 
 
 @oauth2_account_router.get(
@@ -115,6 +141,209 @@ def google_account_status(
     token: str = Depends(oauth2_scheme),
 ) -> GoogleAccountStatusOut:
     return get_google_account_status(token, db)
+
+
+@public_oauth_router.post("/start")
+def oauth_start_endpoint(
+    payload: OAuthStartRequest,
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+) -> dict[str, str]:
+    return oauth_start(token, payload.redirect_uri, db)
+
+
+@public_oauth_router.get("/callback")
+async def oauth_callback_endpoint(
+    code: str,
+    state: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    # The browser callback contains only a one-time authorization code and state.
+    result = await oauth_callback(code, state, db)
+    redirect_uri = result["redirect_uri"]
+    return RedirectResponse(
+        url=f"{redirect_uri}?oauth=completed&state={state}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@oauth2_account_router.post("/refresh", response_model=AccountRefreshOut)
+async def refresh_account(
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+) -> AccountRefreshOut:
+    user = get_current_user(token, db)
+    account = db.scalar(select(GoogleAccount).where(GoogleAccount.id_user == user.id))
+    if account is None:
+        raise HTTPException(status_code=404, detail={"code": "google_account_not_linked"})
+    await refresh_access_token(account, db)
+    return AccountRefreshOut(account_id=account.id, refreshed=True, state="granted")
+
+
+@oauth2_account_router.post("/complete", response_model=GoogleAccountStatusOut)
+def complete_oauth(
+    payload: OAuthCompleteRequest,
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+) -> GoogleAccountStatusOut:
+    user = get_current_user(token, db)
+    state_row = db.scalar(select(OAuthState).where(
+        OAuthState.state_hash == __import__("hashlib").sha256(payload.state.encode()).hexdigest(),
+        OAuthState.id_user == user.id,
+    ))
+    if state_row is None or state_row.consumed_at is None:
+        raise HTTPException(status_code=409, detail={"code": "oauth_completion_pending"})
+    return get_google_account_status(token, db)
+
+
+@oauth2_account_router.delete("/unlink")
+async def unlink_account(
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+) -> dict[str, bool]:
+    user = get_current_user(token, db)
+    account = db.scalar(select(GoogleAccount).where(GoogleAccount.id_user == user.id).with_for_update())
+    if account is None:
+        return {"unlinked": True}
+    if account.refresh_token_enc and account.refresh_token_key_version:
+        from .server_oauth import _open, GOOGLE_TOKEN_URL
+        refresh_token = _open(account.refresh_token_enc, version=account.refresh_token_key_version, associated_data=str(account.id))
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post("https://oauth2.googleapis.com/revoke", params={"token": refresh_token})
+    account.refresh_token_enc = None
+    account.refresh_token_key_version = None
+    account.is_active = False
+    account.drive_appdata_status = "revoked"
+    account.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"unlinked": True}
+
+
+@router.post("/sync/operations", response_model=SyncOperationOut, status_code=202)
+def create_sync_operation(
+    payload: SyncOperationCreate,
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+) -> SyncOperation:
+    user = get_current_user(token, db)
+    account = db.scalar(select(GoogleAccount).where(
+        GoogleAccount.id == payload.id_google_account,
+        GoogleAccount.id_user == user.id,
+    ))
+    if account is None:
+        raise HTTPException(status_code=404, detail={"code": "resource_not_found"})
+    existing = db.scalar(select(SyncOperation).where(
+        SyncOperation.id_user == user.id,
+        SyncOperation.idempotency_key == payload.idempotency_key,
+    ))
+    if existing is not None:
+        return existing
+    active = db.scalar(select(SyncOperation).where(
+        SyncOperation.id_google_account == account.id,
+        SyncOperation.local_ref == payload.local_ref,
+        SyncOperation.state.in_(("pending", "uploading")),
+    ).with_for_update())
+    if active is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "sync_operation_in_progress", "operation_id": str(active.id)},
+        )
+    now = datetime.now(timezone.utc)
+    operation = SyncOperation(
+        id=uuid4(), id_user=user.id, id_google_account=account.id,
+        id_backup_file=payload.backup_id, id_device=payload.id_device,
+        local_ref=payload.local_ref, operation_kind=payload.operation_kind,
+        idempotency_key=payload.idempotency_key,
+        request_hash=hashlib.sha256(
+            payload.model_dump_json(exclude={"idempotency_key"}).encode()
+        ).hexdigest(),
+        state="pending", created_at=now, updated_at=now,
+    )
+    db.add(operation)
+    db.commit()
+    db.refresh(operation)
+    return operation
+
+
+@router.get("/sync/operations/{operation_id}", response_model=SyncOperationOut)
+def get_sync_operation(
+    operation_id: UUID,
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+) -> SyncOperation:
+    user = get_current_user(token, db)
+    operation = db.scalar(select(SyncOperation).where(
+        SyncOperation.id == operation_id, SyncOperation.id_user == user.id
+    ))
+    if operation is None:
+        raise HTTPException(status_code=404, detail={"code": "resource_not_found"})
+    return operation
+
+
+@router.get("/sync/operations", response_model=list[SyncOperationOut])
+def list_sync_operations(
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+) -> list[SyncOperation]:
+    user = get_current_user(token, db)
+    return list(db.scalars(select(SyncOperation).where(
+        SyncOperation.id_user == user.id
+    ).order_by(SyncOperation.created_at.desc()).limit(100)).all())
+
+
+@transfer_router.post("/sync/upload", response_model=BackupFileOut, status_code=201)
+async def upload_backup_snapshot(
+    id_google_account: UUID,
+    local_ref: str,
+    snapshot_version: str,
+    content_hash: str,
+    manifest: str,
+    idempotency_key: str,
+    upload: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+) -> BackupFileOut:
+    try:
+        parsed_manifest = SnapshotManifest.model_validate_json(manifest)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "snapshot_validation_failed"}) from exc
+    return await upload_snapshot(
+        token, id_google_account, local_ref, snapshot_version, content_hash,
+        parsed_manifest, idempotency_key, upload, db,
+    )
+
+
+@transfer_router.get("/sync/download/{backup_id}")
+async def download_backup_snapshot(
+    backup_id: UUID,
+    id_google_account: UUID,
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+) -> Response:
+    content, etag = await download_snapshot(token, id_google_account, backup_id, db)
+    headers = {"ETag": etag} if etag else {}
+    return Response(content=content, media_type="application/octet-stream", headers=headers)
+
+
+@transfer_router.get("/sync/files")
+async def list_drive_backup_files(
+    id_google_account: UUID,
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+) -> list[dict[str, Any]]:
+    return await list_drive_files(token, id_google_account, db)
+
+
+@transfer_router.delete("/sync/files/{backup_id}", status_code=204)
+async def delete_drive_backup_file(
+    backup_id: UUID,
+    id_google_account: UUID,
+    if_match: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+) -> None:
+    await delete_drive_file(token, id_google_account, backup_id, db, if_match)
 
 
 @oauth2_account_router.post(
@@ -184,7 +413,8 @@ def get_backup(
     "/backups",
     response_model=BackupFileOut,
     status_code=status.HTTP_201_CREATED,
-    summary="Record metadata after the app completes a direct Drive upload",
+    summary="Legacy metadata compatibility endpoint; use /sync/upload",
+    deprecated=True,
     responses={409: {"description": "Idempotency or metadata conflict"}},
 )
 def create_backup(
@@ -198,7 +428,8 @@ def create_backup(
 @router.put(
     "/backups/{backup_id}",
     response_model=BackupFileOut,
-    summary="Update metadata with optimistic Drive-version and hash preconditions",
+    summary="Legacy metadata compatibility endpoint; use server-side sync operations",
+    deprecated=True,
     responses={409: {"description": "Current metadata differs from expected version"}},
 )
 def update_backup(
@@ -213,7 +444,8 @@ def update_backup(
 @router.delete(
     "/backups/{backup_id}",
     status_code=status.HTTP_200_OK,
-    summary="Delete metadata only; the app must delete the Drive file separately",
+    summary="Legacy metadata compatibility endpoint; use DELETE /sync/files/{backup_id}",
+    deprecated=True,
 )
 def delete_backup(
     backup_id: UUID,

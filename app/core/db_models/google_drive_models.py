@@ -47,6 +47,7 @@ class SyncResult(str, enum.Enum):
 
 class BackupOperationState(str, enum.Enum):
     PENDING = 'pending'
+    UPLOADING = 'uploading'
     COMPLETED = 'completed'
     FAILED = 'failed'
 
@@ -91,6 +92,7 @@ class GoogleAccount(Base):
     email_google: Mapped[Optional[str]] = mapped_column(String(254))
     access_token_enc: Mapped[Optional[str]] = mapped_column(Text)
     refresh_token_enc: Mapped[Optional[str]] = mapped_column(Text)
+    refresh_token_key_version: Mapped[Optional[str]] = mapped_column(String(32))
     granted_scopes: Mapped[Optional[str]] = mapped_column(String(2048))
     drive_appdata_status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'unknown'")
@@ -99,6 +101,7 @@ class GoogleAccount(Base):
     is_active: Mapped[Optional[bool]] = mapped_column(Boolean, server_default=text('true'))
     expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
     last_refresh_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
+    refresh_lock_until: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
 
@@ -150,6 +153,7 @@ class BackupFile(Base):
     drive_file_id: Mapped[str] = mapped_column(String(255), nullable=False)
     local_ref: Mapped[Optional[str]] = mapped_column(String(255))
     drive_version: Mapped[Optional[str]] = mapped_column(String(255))
+    drive_etag: Mapped[Optional[str]] = mapped_column(String(255))
     snapshot_version: Mapped[Optional[str]] = mapped_column(String(128))
     content_hash: Mapped[Optional[str]] = mapped_column(Text)
     size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger)
@@ -171,6 +175,56 @@ class BackupFile(Base):
     google_account: Mapped['GoogleAccount'] = relationship('GoogleAccount', back_populates='backup_file')
     device: Mapped[Optional['Device']] = relationship()
     sync_log: Mapped[list['SyncLog']] = relationship('SyncLog', back_populates='backup_file')
+
+
+class OAuthState(Base):
+    __tablename__ = 'oauth_state'
+    __table_args__ = (
+        ForeignKeyConstraint(['id_user'], ['app_auth.user.id'], ondelete='CASCADE', name='oauth_state_user_fk'),
+        PrimaryKeyConstraint('id', name='oauth_state_pk'),
+        UniqueConstraint('state_hash', name='oauth_state_hash_uq'),
+        {'schema': 'google_drive'},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    id_user: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    state_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    nonce_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    nonce_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    code_verifier_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    redirect_uri: Mapped[str] = mapped_column(String(2048), nullable=False)
+    expires_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), nullable=False)
+    consumed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
+
+
+class SyncOperation(Base):
+    __tablename__ = 'sync_operation'
+    __table_args__ = (
+        ForeignKeyConstraint(['id_user'], ['app_auth.user.id'], ondelete='CASCADE', name='sync_operation_user_fk'),
+        ForeignKeyConstraint(['id_google_account'], ['app_auth.google_account.id'], ondelete='CASCADE', name='sync_operation_account_fk'),
+        ForeignKeyConstraint(['id_backup_file'], ['google_drive.backup_file.id'], ondelete='SET NULL', name='sync_operation_file_fk'),
+        PrimaryKeyConstraint('id', name='sync_operation_pk'),
+        UniqueConstraint('id_user', 'idempotency_key', name='sync_operation_idempotency_uq'),
+        Index('sync_operation_account_lock_idx', 'id_google_account', 'local_ref'),
+        {'schema': 'google_drive'},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    id_user: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    id_google_account: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    id_backup_file: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid)
+    id_device: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid)
+    local_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    operation_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'pending'"))
+    error_code: Mapped[Optional[str]] = mapped_column(String(64))
+    attempt_count: Mapped[int] = mapped_column(nullable=False, server_default=text('0'))
+    next_attempt_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
 
 
 class BackupOperationIdempotency(Base):

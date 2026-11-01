@@ -89,6 +89,60 @@ class GoogleAccountLinkRequest(BaseModel):
     google_access_token: SecretStr = Field(min_length=1, max_length=8192)
 
 
+class OAuthStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    redirect_uri: str = Field(min_length=1, max_length=2048)
+
+
+class OAuthCallbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: SecretStr = Field(min_length=1, max_length=8192)
+    state: StrictStr = Field(min_length=32, max_length=256)
+
+
+class OAuthCompleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: StrictStr = Field(min_length=32, max_length=256)
+
+
+class SyncOperationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id_google_account: UUID
+    id_device: UUID | None = None
+    local_ref: str = Field(min_length=1, max_length=255)
+    operation_kind: Literal["upload", "download", "list", "metadata", "delete"]
+    idempotency_key: str = Field(min_length=16, max_length=128)
+    backup_id: UUID | None = None
+
+
+class SyncOperationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    id_google_account: UUID
+    id_backup_file: UUID | None
+    id_device: UUID | None
+    local_ref: str
+    operation_kind: str
+    idempotency_key: str
+    state: Literal["pending", "uploading", "completed", "failed"]
+    error_code: str | None
+    attempt_count: int
+    next_attempt_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AccountRefreshOut(BaseModel):
+    account_id: UUID
+    refreshed: bool
+    state: Literal["granted", "revoked"]
+
+
 class GoogleAccountStatusOut(BaseModel):
     account_id: UUID | None
     google_email: str | None
@@ -190,6 +244,7 @@ class BackupMetadataFields(BaseModel):
         max_length=255,
         description="Drive API file version/revision; distinct from snapshot_version.",
     )
+    drive_etag: str | None = Field(default=None, max_length=255)
     snapshot_version: str = Field(
         min_length=1,
         max_length=128,
@@ -218,7 +273,7 @@ class BackupMetadataFields(BaseModel):
 
 
 class BackupMetadataCreate(BackupMetadataFields):
-    id_device: UUID
+    id_device: UUID | None = None
     operation_state: BackupOperationState
     manifest: SnapshotManifest
     idempotency_key: str = Field(min_length=16, max_length=128)
@@ -231,6 +286,7 @@ class BackupMetadataUpdate(BaseModel):
     expected_content_hash: str | None
     idempotency_key: str = Field(min_length=16, max_length=128)
     drive_version: str = Field(min_length=1, max_length=255)
+    drive_etag: str | None = Field(default=None, max_length=255)
     snapshot_version: str = Field(min_length=1, max_length=128)
     content_hash: str = Field(min_length=1, max_length=128)
     size_bytes: int = Field(ge=0, le=MAX_BACKUP_SIZE_BYTES, strict=True)
@@ -267,6 +323,7 @@ class BackupFileCreate(BaseModel):
     drive_file_id: str = Field(min_length=1, max_length=255)
     local_ref: str | None = Field(default=None, max_length=255)
     drive_version: str = Field(min_length=1, max_length=255)
+    drive_etag: str | None = Field(default=None, min_length=1, max_length=255)
     content_hash: str = Field(min_length=1, max_length=128)
     snapshot_version: str = Field(default="legacy", min_length=1, max_length=128)
     id_device: UUID | None = None
@@ -295,6 +352,7 @@ class BackupFileOut(BaseModel):
     drive_file_id: str
     local_ref: str | None
     drive_version: str | None
+    drive_etag: str | None
     snapshot_version: str | None
     content_hash: str | None
     size_bytes: int | None
