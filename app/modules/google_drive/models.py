@@ -118,6 +118,12 @@ class SyncOperationCreate(BaseModel):
     idempotency_key: str = Field(min_length=16, max_length=128)
     backup_id: UUID | None = None
 
+    @model_validator(mode="after")
+    def validate_backup_requirement(self) -> SyncOperationCreate:
+        if self.operation_kind in {"download", "metadata", "delete"} and self.backup_id is None:
+            raise ValueError("backup_id is required for this operation")
+        return self
+
 
 class SyncOperationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -135,6 +141,7 @@ class SyncOperationOut(BaseModel):
     next_attempt_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    result_payload: dict[str, Any] | None = None
 
 
 class AccountRefreshOut(BaseModel):

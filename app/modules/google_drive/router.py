@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import Response
+from fastapi.responses import StreamingResponse
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -43,17 +43,27 @@ from .services import (
     refresh_google_account_status,
     update_backup_metadata,
 )
-from .server_oauth import oauth_callback, oauth_start, refresh_access_token
+from .worker import (
+    create_or_get_operation,
+    lock_sync_target,
+    mark_failed,
+    process_operation,
+    unlock_sync_target,
+)
+from .server_oauth import (
+    oauth_callback,
+    oauth_start,
+    refresh_access_token,
+    unlink_google_account,
+)
 from .transfer import (
     delete_drive_file,
-    download_snapshot,
     list_drive_files,
     upload_snapshot,
+    stream_snapshot,
 )
-from ...core.db_models.google_drive_models import GoogleAccount, OAuthState, SyncOperation
+from ...core.db_models.google_drive_models import BackupFile, Device, GoogleAccount, OAuthState, SyncOperation
 from sqlalchemy import select
-from uuid import uuid4
-import hashlib
 from datetime import datetime, timezone
 from .services import (
     get_backup_file as service_get_backup_file,
@@ -187,12 +197,21 @@ def complete_oauth(
     token: str = Depends(oauth2_scheme),
 ) -> GoogleAccountStatusOut:
     user = get_current_user(token, db)
-    state_row = db.scalar(select(OAuthState).where(
-        OAuthState.state_hash == __import__("hashlib").sha256(payload.state.encode()).hexdigest(),
-        OAuthState.id_user == user.id,
-    ))
+    state_row = db.scalar(
+        select(OAuthState)
+        .where(
+            OAuthState.state_hash
+            == __import__("hashlib").sha256(payload.state.encode()).hexdigest(),
+            OAuthState.id_user == user.id,
+        )
+        .with_for_update()
+    )
     if state_row is None or state_row.consumed_at is None:
         raise HTTPException(status_code=409, detail={"code": "oauth_completion_pending"})
+    if state_row.completion_consumed_at is not None:
+        raise HTTPException(status_code=409, detail={"code": "oauth_completion_reused"})
+    state_row.completion_consumed_at = datetime.now(timezone.utc)
+    db.commit()
     return get_google_account_status(token, db)
 
 
@@ -205,23 +224,12 @@ async def unlink_account(
     account = db.scalar(select(GoogleAccount).where(GoogleAccount.id_user == user.id).with_for_update())
     if account is None:
         return {"unlinked": True}
-    if account.refresh_token_enc and account.refresh_token_key_version:
-        from .server_oauth import _open, GOOGLE_TOKEN_URL
-        refresh_token = _open(account.refresh_token_enc, version=account.refresh_token_key_version, associated_data=str(account.id))
-        import httpx
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post("https://oauth2.googleapis.com/revoke", params={"token": refresh_token})
-    account.refresh_token_enc = None
-    account.refresh_token_key_version = None
-    account.is_active = False
-    account.drive_appdata_status = "revoked"
-    account.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    await unlink_google_account(account, db)
     return {"unlinked": True}
 
 
 @router.post("/sync/operations", response_model=SyncOperationOut, status_code=202)
-def create_sync_operation(
+async def create_sync_operation(
     payload: SyncOperationCreate,
     db: Session = Depends(get_db),
     token: str = Depends(oauth2_scheme),
@@ -233,37 +241,38 @@ def create_sync_operation(
     ))
     if account is None:
         raise HTTPException(status_code=404, detail={"code": "resource_not_found"})
-    existing = db.scalar(select(SyncOperation).where(
-        SyncOperation.id_user == user.id,
-        SyncOperation.idempotency_key == payload.idempotency_key,
-    ))
-    if existing is not None:
-        return existing
-    active = db.scalar(select(SyncOperation).where(
-        SyncOperation.id_google_account == account.id,
-        SyncOperation.local_ref == payload.local_ref,
-        SyncOperation.state.in_(("pending", "uploading")),
-    ).with_for_update())
-    if active is not None:
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "sync_operation_in_progress", "operation_id": str(active.id)},
+    if payload.id_device is not None and db.scalar(select(Device).where(
+        Device.id == payload.id_device,
+        Device.id_user == user.id,
+    )) is None:
+        raise HTTPException(status_code=404, detail={"code": "resource_not_found"})
+    if payload.backup_id is not None and db.scalar(
+        select(BackupFile).where(
+            BackupFile.id == payload.backup_id,
+            BackupFile.id_google_account == account.id,
         )
-    now = datetime.now(timezone.utc)
-    operation = SyncOperation(
-        id=uuid4(), id_user=user.id, id_google_account=account.id,
-        id_backup_file=payload.backup_id, id_device=payload.id_device,
-        local_ref=payload.local_ref, operation_kind=payload.operation_kind,
+    ) is None:
+        raise HTTPException(status_code=404, detail={"code": "resource_not_found"})
+    if payload.operation_kind == "upload":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "use_sync_upload_for_upload_operations"},
+        )
+    request_payload = {
+        "backup_id": str(payload.backup_id) if payload.backup_id else None
+    }
+    operation = create_or_get_operation(
+        db,
+        id_user=user.id,
+        id_google_account=account.id,
+        id_device=payload.id_device,
+        local_ref=payload.local_ref,
+        operation_kind=payload.operation_kind,
         idempotency_key=payload.idempotency_key,
-        request_hash=hashlib.sha256(
-            payload.model_dump_json(exclude={"idempotency_key"}).encode()
-        ).hexdigest(),
-        state="pending", created_at=now, updated_at=now,
+        payload=request_payload,
+        backup_id=payload.backup_id,
     )
-    db.add(operation)
-    db.commit()
-    db.refresh(operation)
-    return operation
+    return await process_operation(db, operation.id) or operation
 
 
 @router.get("/sync/operations/{operation_id}", response_model=SyncOperationOut)
@@ -308,10 +317,47 @@ async def upload_backup_snapshot(
         parsed_manifest = SnapshotManifest.model_validate_json(manifest)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail={"code": "snapshot_validation_failed"}) from exc
-    return await upload_snapshot(
-        token, id_google_account, local_ref, snapshot_version, content_hash,
-        parsed_manifest, idempotency_key, upload, db,
+    user = get_current_user(token, db)
+    if db.scalar(
+        select(GoogleAccount).where(
+            GoogleAccount.id == id_google_account,
+            GoogleAccount.id_user == user.id,
+        )
+    ) is None:
+        raise HTTPException(status_code=404, detail={"code": "resource_not_found"})
+    sync_lock = lock_sync_target(db, id_google_account, local_ref)
+    operation = create_or_get_operation(
+        db,
+        id_user=user.id,
+        id_google_account=id_google_account,
+        id_device=None,
+        local_ref=local_ref,
+        operation_kind="upload",
+        idempotency_key=idempotency_key,
+        payload={
+            "snapshot_version": snapshot_version,
+            "content_hash": content_hash,
+            "manifest": parsed_manifest.model_dump(mode="json"),
+        },
     )
+    if operation.state == "completed" and operation.id_backup_file:
+        backup = db.get(BackupFile, operation.id_backup_file)
+        if backup is not None:
+            unlock_sync_target(db, sync_lock)
+            return backup
+    operation.state = "uploading"
+    operation.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    try:
+        return await upload_snapshot(
+            token, id_google_account, local_ref, snapshot_version, content_hash,
+            parsed_manifest, idempotency_key, upload, db, operation.id,
+        )
+    except HTTPException as exc:
+        mark_failed(db, operation.id, f"upload_http_{exc.status_code}", retryable=exc.status_code >= 500)
+        raise
+    finally:
+        unlock_sync_target(db, sync_lock)
 
 
 @transfer_router.get("/sync/download/{backup_id}")
@@ -320,10 +366,10 @@ async def download_backup_snapshot(
     id_google_account: UUID,
     db: Session = Depends(get_db),
     token: str = Depends(oauth2_scheme),
-) -> Response:
-    content, etag = await download_snapshot(token, id_google_account, backup_id, db)
+) -> StreamingResponse:
+    content, etag = await stream_snapshot(token, id_google_account, backup_id, db)
     headers = {"ETag": etag} if etag else {}
-    return Response(content=content, media_type="application/octet-stream", headers=headers)
+    return StreamingResponse(content, media_type="application/octet-stream", headers=headers)
 
 
 @transfer_router.get("/sync/files")

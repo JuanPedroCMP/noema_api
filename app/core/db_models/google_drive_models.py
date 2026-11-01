@@ -195,6 +195,7 @@ class OAuthState(Base):
     redirect_uri: Mapped[str] = mapped_column(String(2048), nullable=False)
     expires_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), nullable=False)
     consumed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
+    completion_consumed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
 
 
@@ -219,6 +220,9 @@ class SyncOperation(Base):
     operation_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_payload: Mapped[Optional[dict]] = mapped_column(JSONB)
+    drive_file_id: Mapped[Optional[str]] = mapped_column(String(255))
+    result_payload: Mapped[Optional[dict]] = mapped_column(JSONB)
     state: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'pending'"))
     error_code: Mapped[Optional[str]] = mapped_column(String(64))
     attempt_count: Mapped[int] = mapped_column(nullable=False, server_default=text('0'))

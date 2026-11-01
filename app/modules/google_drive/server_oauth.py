@@ -11,8 +11,8 @@ import hashlib
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
-from threading import Lock
 from typing import Any
+from collections.abc import AsyncIterator
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
@@ -22,7 +22,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from ...core.db_models.google_drive_models import GoogleAccount, OAuthState
+from ...core.db_models.google_drive_models import GoogleAccount, OAuthState, SyncOperation
 from ...core.security import get_current_user
 from .models import GOOGLE_DRIVE_APPDATA_SCOPE
 
@@ -30,8 +30,6 @@ GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_DRIVE_URL = "https://www.googleapis.com/drive/v3"
 TOKEN_MARGIN = timedelta(minutes=2)
-_refresh_locks: dict[UUID, Lock] = {}
-_refresh_locks_guard = Lock()
 _access_tokens: dict[UUID, tuple[str, datetime]] = {}
 
 
@@ -96,11 +94,6 @@ def _open(value: str, *, version: str, associated_data: str) -> str:
         raw[:12], raw[12:], associated_data.encode("utf-8")
     )
     return plaintext.decode("utf-8")
-
-
-def _refresh_lock(account_id: UUID) -> Lock:
-    with _refresh_locks_guard:
-        return _refresh_locks.setdefault(account_id, Lock())
 
 
 def oauth_start(token: str, redirect_uri: str, db: Session) -> dict[str, str]:
@@ -266,24 +259,30 @@ async def oauth_callback(code: str, state: str, db: Session) -> dict[str, str]:
 async def refresh_access_token(account: GoogleAccount, db: Session) -> str:
     if not account.refresh_token_enc or not account.refresh_token_key_version:
         raise HTTPException(status_code=409, detail={"code": "google_authorization_revoked"})
-    lock = _refresh_lock(account.id)
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        db.execute(
-            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
-            {"lock_key": f"noema-google-refresh:{account.id}"},
+    if db.bind is None or db.bind.dialect.name != "postgresql":
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "distributed_lock_unavailable"},
         )
-    with lock:
-        locked = db.scalar(
-            select(GoogleAccount).where(GoogleAccount.id == account.id).with_for_update()
-        )
-        if locked is None:
-            raise HTTPException(status_code=404, detail={"code": "google_account_not_linked"})
-        account = locked
-        now = datetime.now(timezone.utc)
-        cached = _access_tokens.get(account.id)
-        if cached and cached[1] - TOKEN_MARGIN > now:
-            return cached[0]
-        return await _exchange_refresh(account, db)
+    db.execute(
+        text(
+            "SELECT pg_advisory_xact_lock("
+            "('x' || substr(replace(:account_id, '-', ''), 1, 16))::bit(64)::bigint, "
+            "('x' || substr(replace(:account_id, '-', ''), 17, 16))::bit(64)::bigint)"
+        ),
+        {"account_id": str(account.id)},
+    )
+    locked = db.scalar(
+        select(GoogleAccount).where(GoogleAccount.id == account.id).with_for_update()
+    )
+    if locked is None:
+        raise HTTPException(status_code=404, detail={"code": "google_account_not_linked"})
+    account = locked
+    now = datetime.now(timezone.utc)
+    cached = _access_tokens.get(account.id)
+    if cached and cached[1] - TOKEN_MARGIN > now:
+        return cached[0]
+    return await _exchange_refresh(account, db)
 
 
 async def _exchange_refresh(account: GoogleAccount, db: Session) -> str:
@@ -357,3 +356,66 @@ async def drive_request(
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.request(method, url, headers=headers, **kwargs)
     return response
+
+
+async def drive_stream(
+    account: GoogleAccount,
+    db: Session,
+    method: str,
+    path: str,
+    **kwargs: Any,
+) -> AsyncIterator[bytes]:
+    """Stream a Drive response without buffering the snapshot in memory."""
+    access_token = await refresh_access_token(account, db)
+    headers = dict(kwargs.pop("headers", {}))
+    headers["Authorization"] = "Bearer " + access_token
+    headers["Accept"] = "application/octet-stream"
+    url = path if path.startswith("http") else f"{GOOGLE_DRIVE_URL}{path}"
+    async with httpx.AsyncClient(timeout=60) as client:
+        async with client.stream(method, url, headers=headers, **kwargs) as response:
+            if response.status_code >= 400:
+                raise HTTPException(
+                    status_code=404 if response.status_code == 404 else 502,
+                    detail={"code": "drive_file_missing" if response.status_code == 404 else "drive_download_failed"},
+                )
+            async for chunk in response.aiter_bytes(8 * 1024 * 1024):
+                yield chunk
+
+
+async def unlink_google_account(account: GoogleAccount, db: Session) -> None:
+    pending = db.scalar(
+        select(SyncOperation.id).where(
+            SyncOperation.id_google_account == account.id,
+            SyncOperation.state.in_(("pending", "uploading")),
+        ).limit(1)
+    )
+    if pending is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "google_account_operations_pending"},
+        )
+    if account.refresh_token_enc and account.refresh_token_key_version:
+        refresh_token = _open(
+            account.refresh_token_enc,
+            version=account.refresh_token_key_version,
+            associated_data=str(account.id),
+        )
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    "https://oauth2.googleapis.com/revoke",
+                    params={"token": refresh_token},
+                )
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502, detail={"code": "google_revoke_failed"}
+            ) from exc
+        if response.status_code >= 500:
+            raise HTTPException(status_code=502, detail={"code": "google_revoke_failed"})
+    _access_tokens.pop(account.id, None)
+    account.refresh_token_enc = None
+    account.refresh_token_key_version = None
+    account.is_active = False
+    account.drive_appdata_status = "revoked"
+    account.updated_at = datetime.now(timezone.utc)
+    db.commit()

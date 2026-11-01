@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
+from datetime import datetime, timezone
+from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
 
@@ -9,14 +11,14 @@ from fastapi import HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ...core.db_models.google_drive_models import BackupFile, GoogleAccount
+from ...core.db_models.google_drive_models import BackupFile, GoogleAccount, SyncOperation
 from ...core.security import get_current_user
 from .models import (
     MAX_BACKUP_SIZE_BYTES,
     BackupMetadataCreate,
     SnapshotManifest,
 )
-from .server_oauth import drive_request
+from .server_oauth import drive_request, drive_stream
 
 MAX_CHUNK = 8 * 1024 * 1024
 
@@ -41,8 +43,14 @@ async def upload_snapshot(
     idempotency_key: str,
     upload: UploadFile,
     db: Session,
+    operation_id: UUID | None = None,
 ) -> BackupFile:
     account = _account(token, account_id, db)
+    if manifest.snapshot_version != snapshot_version:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "snapshot_manifest_version_mismatch"},
+        )
     existing = db.scalar(select(BackupFile).where(
         BackupFile.id_google_account == account_id,
         BackupFile.idempotency_key == idempotency_key,
@@ -63,6 +71,47 @@ async def upload_snapshot(
         actual_hash = f"sha256:{digest.hexdigest()}"
         if actual_hash.lower() != content_hash.lower():
             raise HTTPException(status_code=422, detail={"code": "snapshot_hash_mismatch"})
+        if operation_id is not None:
+            operation = db.get(SyncOperation, operation_id)
+            if operation is not None and operation.drive_file_id:
+                existing_remote = await drive_request(
+                    account,
+                    db,
+                    "GET",
+                    f"/files/{operation.drive_file_id}",
+                    params={"fields": "id,parents,appProperties,version,etag,size"},
+                )
+                remote = existing_remote.json() if existing_remote.status_code < 400 else {}
+                if (
+                    existing_remote.status_code < 400
+                    and "appDataFolder" in (remote.get("parents") or [])
+                    and remote.get("appProperties", {}).get("noema_local_ref") == local_ref
+                ):
+                    from .services import create_backup_metadata
+                    backup = create_backup_metadata(
+                        token,
+                        BackupMetadataCreate(
+                            id_google_account=account_id,
+                            id_device=None,
+                            drive_file_id=operation.drive_file_id,
+                            local_ref=local_ref,
+                            drive_version=str(remote.get("version", "")),
+                            drive_etag=remote.get("etag"),
+                            snapshot_version=snapshot_version,
+                            content_hash=content_hash,
+                            size_bytes=size,
+                            operation_state="completed",
+                            manifest=manifest,
+                            idempotency_key=idempotency_key,
+                        ),
+                        db,
+                    )
+                    operation.id_backup_file = backup.id
+                    operation.state = "completed"
+                    operation.result_payload = {"backup_id": str(backup.id)}
+                    operation.updated_at = datetime.now(timezone.utc)
+                    db.commit()
+                    return backup
         metadata = {
             "name": f"noema-{local_ref}",
             "parents": ["appDataFolder"],
@@ -107,8 +156,14 @@ async def upload_snapshot(
     drive_version = str(result.get("version", result.get("modifiedTime", "")))
     if not isinstance(drive_file_id, str) or not drive_version:
         raise HTTPException(status_code=502, detail={"code": "drive_upload_invalid_response"})
+    if operation_id is not None:
+        operation = db.get(SyncOperation, operation_id)
+        if operation is not None:
+            operation.drive_file_id = drive_file_id
+            operation.updated_at = datetime.now(timezone.utc)
+            db.commit()
     from .services import create_backup_metadata
-    return create_backup_metadata(token, BackupMetadataCreate(
+    backup = create_backup_metadata(token, BackupMetadataCreate(
         id_google_account=account_id,
         id_device=None,
         drive_file_id=drive_file_id,
@@ -122,6 +177,15 @@ async def upload_snapshot(
         manifest=manifest,
         idempotency_key=idempotency_key,
     ), db)
+    if operation_id is not None:
+        operation = db.get(SyncOperation, operation_id)
+        if operation is not None:
+            operation.id_backup_file = backup.id
+            operation.state = "completed"
+            operation.result_payload = {"backup_id": str(backup.id)}
+            operation.updated_at = datetime.now(timezone.utc)
+            db.commit()
+    return backup
 
 
 async def _owned_backup(token: str, account_id: UUID, backup_id: UUID, db: Session) -> BackupFile:
@@ -138,33 +202,48 @@ async def _owned_backup(token: str, account_id: UUID, backup_id: UUID, db: Sessi
     return backup
 
 
-async def download_snapshot(token: str, account_id: UUID, backup_id: UUID, db: Session) -> tuple[bytes, str | None]:
+async def stream_snapshot(
+    token: str, account_id: UUID, backup_id: UUID, db: Session
+) -> tuple[AsyncIterator[bytes], str | None]:
     account = _account(token, account_id, db)
     backup = await _owned_backup(token, account_id, backup_id, db)
     metadata = await drive_request(
-        account, db, "GET", f"/files/{backup.drive_file_id}",
-        params={"fields": "id,parents,appProperties,version,etag,size,md5Checksum"},
+        account,
+        db,
+        "GET",
+        f"/files/{backup.drive_file_id}",
+        params={"fields": "id,parents,appProperties,version,etag,size"},
     )
-    if metadata.status_code == 404:
-        raise HTTPException(status_code=404, detail={"code": "drive_file_missing"})
-    remote = metadata.json()
+    remote = metadata.json() if metadata.status_code < 400 else {}
     if (
-        metadata.status_code >= 400
+        metadata.status_code == 404
         or remote.get("id") != backup.drive_file_id
         or "appDataFolder" not in (remote.get("parents") or [])
         or remote.get("appProperties", {}).get("noema_local_ref") != backup.local_ref
+        or (
+            backup.size_bytes is not None
+            and remote.get("size") is not None
+            and int(remote["size"]) != backup.size_bytes
+        )
     ):
         raise HTTPException(status_code=409, detail={"code": "drive_metadata_conflict"})
-    response = await drive_request(account, db, "GET", f"/files/{backup.drive_file_id}?alt=media")
-    if response.status_code == 404:
-        raise HTTPException(status_code=404, detail={"code": "drive_file_missing"})
-    if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail={"code": "drive_download_failed"})
-    return response.content, response.headers.get("etag") or remote.get("etag")
+    return (
+        drive_stream(account, db, "GET", f"/files/{backup.drive_file_id}?alt=media"),
+        remote.get("etag") or backup.drive_etag,
+    )
 
 
 async def list_drive_files(token: str, account_id: UUID, db: Session) -> list[dict[str, Any]]:
     account = _account(token, account_id, db)
+    known_ids = {
+        row.drive_file_id
+        for row in db.scalars(
+            select(BackupFile).where(
+                BackupFile.id_google_account == account_id,
+                BackupFile.operation_state == "completed",
+            )
+        )
+    }
     response = await drive_request(
         account, db, "GET", "/files",
         params={"spaces": "appDataFolder", "fields": "files(id,name,version,size,md5Checksum,modifiedTime,appProperties)"},
@@ -172,7 +251,13 @@ async def list_drive_files(token: str, account_id: UUID, db: Session) -> list[di
     if response.status_code >= 400:
         raise HTTPException(status_code=502, detail={"code": "drive_list_failed"})
     payload = response.json()
-    return payload.get("files", []) if isinstance(payload, dict) else []
+    files = payload.get("files", []) if isinstance(payload, dict) else []
+    return [
+        item
+        for item in files
+        if item.get("id") in known_ids
+        and item.get("appProperties", {}).get("noema_local_ref") is not None
+    ]
 
 
 async def delete_drive_file(token: str, account_id: UUID, backup_id: UUID, db: Session, if_match: str | None = None) -> None:

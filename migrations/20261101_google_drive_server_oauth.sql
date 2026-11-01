@@ -19,8 +19,11 @@ CREATE TABLE IF NOT EXISTS google_drive.oauth_state (
     redirect_uri VARCHAR(2048) NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
     consumed_at TIMESTAMPTZ,
+    completion_consumed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE google_drive.oauth_state
+    ADD COLUMN IF NOT EXISTS completion_consumed_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS oauth_state_expiry_idx
     ON google_drive.oauth_state (expires_at);
 
@@ -34,6 +37,9 @@ CREATE TABLE IF NOT EXISTS google_drive.sync_operation (
     operation_kind VARCHAR(16) NOT NULL CHECK (operation_kind IN ('upload', 'download', 'list', 'metadata', 'delete')),
     idempotency_key VARCHAR(128) NOT NULL,
     request_hash VARCHAR(64) NOT NULL,
+    request_payload JSONB,
+    drive_file_id VARCHAR(255),
+    result_payload JSONB,
     state VARCHAR(16) NOT NULL DEFAULT 'pending'
         CHECK (state IN ('pending', 'uploading', 'completed', 'failed')),
     error_code VARCHAR(64),
@@ -43,7 +49,14 @@ CREATE TABLE IF NOT EXISTS google_drive.sync_operation (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (id_user, idempotency_key)
 );
+ALTER TABLE google_drive.sync_operation
+    ADD COLUMN IF NOT EXISTS request_payload JSONB,
+    ADD COLUMN IF NOT EXISTS drive_file_id VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS result_payload JSONB;
 CREATE INDEX IF NOT EXISTS sync_operation_account_lock_idx
     ON google_drive.sync_operation (id_google_account, local_ref);
+CREATE INDEX IF NOT EXISTS sync_operation_pending_idx
+    ON google_drive.sync_operation (state, next_attempt_at, created_at)
+    WHERE state IN ('pending', 'uploading');
 
 COMMIT;
