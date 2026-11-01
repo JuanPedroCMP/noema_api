@@ -23,6 +23,17 @@ refreshes before expiry margin, rotates refresh tokens when Google returns
 one, and marks the account revoked on `invalid_grant`. Tokens are never
 included in response models, logs, sync metadata, or errors.
 
+Starting OAuth validates the client ID, client secret, exact callback allowlist,
+and active token-encryption key before creating OAuth state. A configuration
+failure returns the missing environment-variable name without exposing any
+secret value.
+
+Unlink removes the Google identity and encrypted credentials from the Noema
+account while retaining backup metadata and Drive files. Google grant
+revocation is attempted, but a missing encryption key or Google/network error
+does not block local unlink; the endpoint returns `google_grant_revoked: false`
+so the client can show the user that remote revocation still needs attention.
+
 Snapshot transfer is through `POST /api/v1/google_drive/sync/upload`,
 `GET /api/v1/google_drive/sync/download/{backup_id}`, `GET
 /api/v1/google_drive/sync/files`, and `DELETE

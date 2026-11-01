@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
 import httpx
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException, status
 from sqlalchemy import select, text
@@ -36,15 +38,24 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_DRIVE_URL = "https://www.googleapis.com/drive/v3"
 TOKEN_MARGIN = timedelta(minutes=2)
 _access_tokens: dict[UUID, tuple[str, datetime]] = {}
+logger = logging.getLogger(__name__)
+
+
+def _configuration_error(name: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "google_oauth_not_configured",
+            "message": message,
+            "missing_configuration": [name],
+        },
+    )
 
 
 def _config(name: str) -> str:
-    value = os.getenv(name)
+    value = os.getenv(name, "").strip()
     if not value:
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "google_oauth_not_configured", "message": f"{name} is not configured."},
-        )
+        raise _configuration_error(name, f"{name} is not configured.")
     return value
 
 
@@ -59,11 +70,18 @@ def _allowed_redirect_uris() -> set[str]:
         if value.strip()
     }
     if not configured:
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "google_oauth_not_configured", "message": "Google OAuth redirect URIs are not configured."},
+        raise _configuration_error(
+            "GOOGLE_OAUTH_REDIRECT_URIS",
+            "Google OAuth redirect URIs are not configured.",
         )
     return configured
+
+
+def _validate_oauth_configuration() -> None:
+    _config("GOOGLE_OAUTH_CLIENT_ID")
+    _config("GOOGLE_OAUTH_CLIENT_SECRET")
+    _allowed_redirect_uris()
+    _key(_key_version())
 
 
 def _hash(value: str) -> str:
@@ -90,17 +108,25 @@ def oauth_cancel(state: str, db: Session, error: str | None = None) -> None:
 
 
 def _key(version: str) -> bytes:
-    raw = os.getenv(f"GOOGLE_TOKEN_ENCRYPTION_KEY_{version}") or os.getenv(
-        "GOOGLE_TOKEN_ENCRYPTION_KEY"
-    )
+    versioned_name = f"GOOGLE_TOKEN_ENCRYPTION_KEY_{version}"
+    raw = os.getenv(versioned_name) or os.getenv("GOOGLE_TOKEN_ENCRYPTION_KEY")
     if not raw:
-        raise RuntimeError("Google token encryption key is not configured.")
+        raise _configuration_error(
+            versioned_name,
+            f"{versioned_name} or GOOGLE_TOKEN_ENCRYPTION_KEY is not configured.",
+        )
     try:
         value = base64.b64decode(raw, validate=True)
     except (ValueError, base64.binascii.Error) as exc:
-        raise RuntimeError("Google token encryption key must be base64.") from exc
+        raise _configuration_error(
+            versioned_name,
+            f"{versioned_name} must contain a base64-encoded AES key.",
+        ) from exc
     if len(value) not in (16, 24, 32):
-        raise RuntimeError("Google token encryption key must be 128, 192, or 256 bits.")
+        raise _configuration_error(
+            versioned_name,
+            f"{versioned_name} must decode to 16, 24, or 32 bytes.",
+        )
     return value
 
 
@@ -122,6 +148,7 @@ def _open(value: str, *, version: str, associated_data: str) -> str:
 
 def oauth_start(token: str, redirect_uri: str, db: Session) -> dict[str, str]:
     user = get_current_user(token, db)
+    _validate_oauth_configuration()
     client_id = _config("GOOGLE_OAUTH_CLIENT_ID")
     if redirect_uri not in _allowed_redirect_uris():
         raise HTTPException(status_code=400, detail={"code": "invalid_redirect_uri"})
@@ -421,7 +448,7 @@ async def drive_stream(
                 yield chunk
 
 
-async def unlink_google_account(account: GoogleAccount, db: Session) -> None:
+async def unlink_google_account(account: GoogleAccount, db: Session) -> bool:
     pending = db.scalar(
         select(SyncOperation.id).where(
             SyncOperation.id_google_account == account.id,
@@ -433,28 +460,40 @@ async def unlink_google_account(account: GoogleAccount, db: Session) -> None:
             status_code=409,
             detail={"code": "google_account_operations_pending"},
         )
+    remote_revoked = False
     if account.refresh_token_enc and account.refresh_token_key_version:
-        refresh_token = _open(
-            account.refresh_token_enc,
-            version=account.refresh_token_key_version,
-            associated_data=str(account.id),
-        )
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.post(
-                    "https://oauth2.googleapis.com/revoke",
-                    params={"token": refresh_token},
-                )
-        except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=502, detail={"code": "google_revoke_failed"}
-            ) from exc
-        if response.status_code >= 500:
-            raise HTTPException(status_code=502, detail={"code": "google_revoke_failed"})
+            refresh_token = _open(
+                account.refresh_token_enc,
+                version=account.refresh_token_key_version,
+                associated_data=str(account.id),
+            )
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    response = await client.post(
+                        "https://oauth2.googleapis.com/revoke",
+                        params={"token": refresh_token},
+                    )
+                remote_revoked = response.status_code in {200, 400}
+                if not remote_revoked:
+                    logger.warning(
+                        "Google OAuth grant revocation returned HTTP %s during unlink.",
+                        response.status_code,
+                    )
+            except httpx.HTTPError:
+                logger.warning("Google OAuth grant revocation failed during unlink.")
+        except (HTTPException, InvalidTag, ValueError, base64.binascii.Error):
+            logger.warning(
+                "Stored Google refresh token could not be decrypted during unlink."
+            )
     _access_tokens.pop(account.id, None)
     account.refresh_token_enc = None
     account.refresh_token_key_version = None
+    account.google_user_id = None
+    account.email_google = None
+    account.granted_scopes = None
     account.is_active = False
     account.drive_appdata_status = "revoked"
     account.updated_at = datetime.now(timezone.utc)
     db.commit()
+    return remote_revoked

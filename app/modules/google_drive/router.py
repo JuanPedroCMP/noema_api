@@ -263,9 +263,9 @@ async def unlink_account(
     user = get_current_user(token, db)
     account = db.scalar(select(GoogleAccount).where(GoogleAccount.id_user == user.id).with_for_update())
     if account is None:
-        return {"unlinked": True}
-    await unlink_google_account(account, db)
-    return {"unlinked": True}
+        return {"unlinked": True, "google_grant_revoked": True}
+    google_grant_revoked = await unlink_google_account(account, db)
+    return {"unlinked": True, "google_grant_revoked": google_grant_revoked}
 
 
 @router.post("/sync/operations", response_model=SyncOperationOut, status_code=202)

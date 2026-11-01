@@ -380,6 +380,92 @@ def test_oauth_cancel_marks_state_with_safe_error_code():
     assert db.commits == 1
 
 
+def test_oauth_configuration_reports_missing_server_setting(monkeypatch):
+    for name in (
+        "GOOGLE_OAUTH_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "GOOGLE_OAUTH_REDIRECT_URIS",
+        "GOOGLE_TOKEN_ENCRYPTION_KEY_VERSION",
+        "GOOGLE_TOKEN_ENCRYPTION_KEY",
+        "GOOGLE_TOKEN_ENCRYPTION_KEY_current",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_REDIRECT_URIS", "https://api.example.test/callback")
+
+    with pytest.raises(HTTPException) as missing:
+        server_oauth._validate_oauth_configuration()
+
+    assert missing.value.status_code == 503
+    assert missing.value.detail["code"] == "google_oauth_not_configured"
+    assert missing.value.detail["missing_configuration"] == [
+        "GOOGLE_OAUTH_CLIENT_SECRET"
+    ]
+
+
+def test_unlink_clears_local_account_even_if_refresh_token_cannot_be_decrypted(
+    monkeypatch,
+):
+    linked = account()
+    linked.google_user_id = "google-subject"
+    linked.refresh_token_enc = "encrypted"
+    linked.refresh_token_key_version = "v1"
+    db = FakeDB(scalar_results=[None])
+
+    def fail_decrypt(*_args, **_kwargs):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "google_oauth_not_configured",
+                "missing_configuration": ["GOOGLE_TOKEN_ENCRYPTION_KEY_v1"],
+            },
+        )
+
+    monkeypatch.setattr(server_oauth, "_open", fail_decrypt)
+
+    remote_revoked = asyncio.run(server_oauth.unlink_google_account(linked, db))
+
+    assert remote_revoked is False
+    assert linked.refresh_token_enc is None
+    assert linked.refresh_token_key_version is None
+    assert linked.google_user_id is None
+    assert linked.email_google is None
+    assert linked.granted_scopes is None
+    assert linked.is_active is False
+    assert db.commits == 1
+
+
+def test_unlink_keeps_local_detach_when_google_revoke_fails(monkeypatch):
+    linked = account()
+    linked.google_user_id = "google-subject"
+    linked.refresh_token_enc = "encrypted"
+    linked.refresh_token_key_version = "v1"
+
+    class FailedRevokeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return SimpleNamespace(status_code=503)
+
+    monkeypatch.setattr(server_oauth, "_open", lambda *_args, **_kwargs: "refresh")
+    monkeypatch.setattr(server_oauth.httpx, "AsyncClient", FailedRevokeClient)
+    db = FakeDB(scalar_results=[None])
+
+    remote_revoked = asyncio.run(server_oauth.unlink_google_account(linked, db))
+
+    assert remote_revoked is False
+    assert linked.google_user_id is None
+    assert linked.refresh_token_enc is None
+    assert db.commits == 1
+
+
 def test_backup_list_accepts_optional_filters_and_account_uuid(monkeypatch):
     seen_backups = []
     seen_logs = []
