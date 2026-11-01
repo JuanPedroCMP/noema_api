@@ -43,6 +43,7 @@ from app.modules.google_drive.router import (
     api_rate_limit,
     google_oauth_rate_limit,
     router,
+    transfer_router,
 )
 from app.modules.user import service as user_service
 from app.modules.user.models import UserCreate, UserUpdate, validate_password_strength
@@ -236,6 +237,57 @@ def test_new_routes_require_authentication_and_have_no_file_transfer_contract():
     serialized = str(schema["paths"])
     assert "application/octet-stream" not in serialized
     assert "multipart/form-data" not in serialized
+
+
+def test_snapshot_upload_accepts_multipart_form_fields():
+    app = FastAPI()
+    app.include_router(transfer_router)
+    app.dependency_overrides[get_db] = lambda: FakeDB()
+    app.dependency_overrides[oauth2_scheme] = lambda: "test-noema-token"
+    app.dependency_overrides[api_rate_limit] = lambda: None
+
+    schema = app.openapi()
+    operation = schema["paths"]["/google_drive/sync/upload"]["post"]
+    request_body = operation["requestBody"]["content"]["multipart/form-data"]["schema"]
+    schema_name = request_body["$ref"].rsplit("/", maxsplit=1)[-1]
+    body_schema = schema["components"]["schemas"][schema_name]
+
+    assert set(body_schema["required"]) >= {
+        "id_google_account",
+        "local_ref",
+        "snapshot_version",
+        "content_hash",
+        "manifest",
+        "idempotency_key",
+        "upload",
+    }
+    assert not {
+        parameter["name"]
+        for parameter in operation.get("parameters", [])
+        if parameter["in"] == "query"
+    } & {
+        "id_google_account",
+        "local_ref",
+        "snapshot_version",
+        "content_hash",
+        "manifest",
+        "idempotency_key",
+    }
+
+    response = TestClient(app).post(
+        "/google_drive/sync/upload",
+        data={
+            "id_google_account": str(ACCOUNT_ID),
+            "local_ref": "primary-snapshot",
+            "snapshot_version": "17",
+            "content_hash": "5c2d7f0bb5921471021c99efb2e357d5",
+            "manifest": "{}",
+            "idempotency_key": "37d19871-7e6a-4b1f-bcff-53dc0d397a44",
+        },
+        files={"upload": ("snapshot.json", b"{}", "application/json")},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "snapshot_validation_failed"
 
 
 def test_backup_list_accepts_optional_filters_and_account_uuid(monkeypatch):

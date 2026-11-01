@@ -6,7 +6,16 @@ from time import monotonic
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from fastapi.responses import StreamingResponse
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
@@ -30,6 +39,7 @@ from .models import (
     SyncOperationCreate,
     SyncOperationOut,
     AccountRefreshOut,
+    SnapshotManifest,
 )
 from .services import (
     create_backup_metadata,
@@ -301,12 +311,12 @@ def list_sync_operations(
 
 @transfer_router.post("/sync/upload", response_model=BackupFileOut, status_code=201)
 async def upload_backup_snapshot(
-    id_google_account: UUID,
-    local_ref: str,
-    snapshot_version: str,
-    content_hash: str,
-    manifest: str,
-    idempotency_key: str,
+    id_google_account: UUID = Form(...),
+    local_ref: str = Form(...),
+    snapshot_version: str = Form(...),
+    content_hash: str = Form(...),
+    manifest: str = Form(...),
+    idempotency_key: str = Form(...),
     upload: UploadFile = File(...),
     db: Session = Depends(get_db),
     token: str = Depends(oauth2_scheme),
