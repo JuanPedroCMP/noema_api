@@ -34,8 +34,8 @@ def _sync_lock_key(account_id: UUID, local_ref: str) -> tuple[int, int]:
         f"noema-google-sync:{account_id}:{local_ref}".encode()
     ).digest()
     return (
-        int.from_bytes(digest[:8], "big", signed=True),
-        int.from_bytes(digest[8:16], "big", signed=True),
+        int.from_bytes(digest[:4], "big", signed=True),
+        int.from_bytes(digest[4:8], "big", signed=True),
     )
 
 

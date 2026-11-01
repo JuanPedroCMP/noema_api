@@ -27,6 +27,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.auth import service as auth_service
 from app.modules.auth.models import GoogleAccountOut
 from app.modules.google_drive import oauth, services
+from app.modules.google_drive import worker as google_drive_worker
 from app.modules.google_drive.models import (
     GOOGLE_DRIVE_APPDATA_SCOPE,
     BackupFileCreate,
@@ -288,6 +289,23 @@ def test_snapshot_upload_accepts_multipart_form_fields():
     )
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "snapshot_validation_failed"
+
+
+def test_sync_advisory_lock_uses_postgres_int32_key_pair():
+    executed = []
+    db = SimpleNamespace(
+        bind=SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+        execute=lambda statement, parameters: executed.append((statement, parameters)),
+    )
+
+    key = google_drive_worker.lock_sync_target(db, ACCOUNT_ID, "primary-snapshot")
+    assert all(-(2**31) <= part < 2**31 for part in key)
+    assert "pg_advisory_lock(:first, :second)" in str(executed[0][0])
+    assert executed[0][1] == {"first": key[0], "second": key[1]}
+
+    google_drive_worker.unlock_sync_target(db, key)
+    assert "pg_advisory_unlock(:first, :second)" in str(executed[1][0])
+    assert executed[1][1] == {"first": key[0], "second": key[1]}
 
 
 def test_backup_list_accepts_optional_filters_and_account_uuid(monkeypatch):
