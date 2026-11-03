@@ -4,7 +4,7 @@ import decimal
 import enum
 import uuid
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKeyConstraint, Integer, JSON, Numeric, PrimaryKeyConstraint, String, Text, UniqueConstraint, Uuid, text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKeyConstraint, Index, Integer, JSON, Numeric, PrimaryKeyConstraint, String, Text, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
@@ -41,15 +41,25 @@ class TaskType(str, enum.Enum):
 class Agent(Base):
     __tablename__ = 'agent'
     __table_args__ = (
+        ForeignKeyConstraint(['id_user'], ['app_auth.user.id'], ondelete='CASCADE', onupdate='CASCADE', name='agent_user_fk'),
         PrimaryKeyConstraint('id', name='agent_pk'),
+        Index(
+            'ai_agent_user_alias_uq',
+            'id_user',
+            'alias',
+            unique=True,
+            postgresql_where=text('id_user IS NOT NULL'),
+        ),
         {'schema': 'ai'}
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    id_user: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid)
     alias: Mapped[str] = mapped_column(String(64), nullable=False)
     task: Mapped[TaskType] = mapped_column(Enum(TaskType, values_callable=lambda cls: [member.value for member in cls], name='task_type', schema='ai'), nullable=False)
     base_system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     temperature: Mapped[Optional[decimal.Decimal]] = mapped_column(Numeric(3, 2), comment='Deve estar entre 0 e 2')
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text('true'))
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
 
@@ -59,16 +69,31 @@ class Agent(Base):
 class AiProvider(Base):
     __tablename__ = 'ai_provider'
     __table_args__ = (
+        ForeignKeyConstraint(['id_user'], ['app_auth.user.id'], ondelete='CASCADE', onupdate='CASCADE', name='ai_provider_user_fk'),
         PrimaryKeyConstraint('id', name='ai_provider_pk'),
-        UniqueConstraint('slug', name='ai_provider_slug_uq'),
+        Index(
+            'ai_provider_global_slug_uq',
+            'slug',
+            unique=True,
+            postgresql_where=text('id_user IS NULL'),
+        ),
+        Index(
+            'ai_provider_user_slug_uq',
+            'id_user',
+            'slug',
+            unique=True,
+            postgresql_where=text('id_user IS NOT NULL'),
+        ),
         {'schema': 'ai'}
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    id_user: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid)
     slug: Mapped[str] = mapped_column(String(64), nullable=False)
     display_name: Mapped[str] = mapped_column(String(64), nullable=False)
     base_url: Mapped[Optional[str]] = mapped_column(Text)
-    is_active: Mapped[Optional[bool]] = mapped_column(Boolean, server_default=text('true'))
+    protocol: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'native'"))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text('true'))
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
 
@@ -104,7 +129,7 @@ class AiModel(Base):
     __table_args__ = (
         ForeignKeyConstraint(['id_ai_provider'], ['ai.ai_provider.id'], ondelete='RESTRICT', onupdate='CASCADE', match='FULL', name='ai_provider_fk'),
         PrimaryKeyConstraint('id', name='ai_model_pk'),
-        UniqueConstraint('slug', name='ai_model_slug_uq'),
+        Index('ai_model_provider_slug_uq', 'id_ai_provider', 'slug', unique=True),
         {'schema': 'ai'}
     )
 
@@ -116,7 +141,7 @@ class AiModel(Base):
     input_token_limit: Mapped[Optional[int]] = mapped_column(Integer)
     output_token_limit: Mapped[Optional[int]] = mapped_column(Integer)
     supports_vision: Mapped[Optional[bool]] = mapped_column(Boolean)
-    is_active: Mapped[Optional[bool]] = mapped_column(Boolean, server_default=text('true'))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text('true'))
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
 
@@ -156,6 +181,11 @@ class AgentModel(Base):
         ForeignKeyConstraint(['id_agent'], ['ai.agent.id'], ondelete='RESTRICT', onupdate='CASCADE', match='FULL', name='agent_fk'),
         ForeignKeyConstraint(['id_ai_model'], ['ai.ai_model.id'], ondelete='RESTRICT', onupdate='CASCADE', match='FULL', name='ai_model_fk'),
         PrimaryKeyConstraint('id', name='task_model_preference_pk'),
+        Index(
+            'ai_agent_model_active_idx',
+            'id_agent',
+            'is_active',
+        ),
         {'schema': 'ai'}
     )
 
@@ -165,6 +195,7 @@ class AgentModel(Base):
     custom_system_prompt: Mapped[Optional[str]] = mapped_column(Text)
     custom_temperature: Mapped[Optional[decimal.Decimal]] = mapped_column(Numeric(3, 2))
     quality_expected: Mapped[Optional[AgentModelQuality]] = mapped_column(Enum(AgentModelQuality, values_callable=lambda cls: [member.value for member in cls], name='agent_model_quality', schema='ai'))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text('true'))
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
 

@@ -14,6 +14,7 @@ from app.modules.google_drive.router import (
 )
 from app.modules.log.router import router as log_router
 from app.modules.ai_provider.router import router as ai_provider_router
+from app.modules.ai.personal_router import router as personal_ai_router
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -29,4 +30,4 @@ api_router.include_router(google_drive_transfer_router)
 api_router.include_router(public_oauth_router)
 api_router.include_router(log_router)
 api_router.include_router(ai_provider_router)
-
+api_router.include_router(personal_ai_router)

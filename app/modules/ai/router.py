@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from ...core.security import oauth2_scheme
+from ...core.admin import require_admin
 from ...core.database import get_db
-from ...core.db_models.ai_models import TaskType
 from .services import get_provider as gp, list_providers as lp, create_provider as cp, update_provider as up, delete_provider as dp, get_ai_model as gam, list_ai_models as lam, create_ai_model as cam, update_ai_model as uam, delete_ai_model as dam,  get_user_api_key as guak, list_user_api_keys as luak, create_user_api_key as cuak, update_user_api_key as uuak, delete_user_api_key as duak, update_agent as ua, get_agent as ga, creaate_agent as ca, delete_agent as da, list_agents as la, get_agent_model as gaml, list_agent_models as laml, create_agent_model as caml, update_agent_model as uaml, delete_agent_model as daml, delete_user_api_key_can_use_ia_model as duapkcuam, list_user_api_key_can_use_ia_model as luapkcuam, get_user_api_key_can_use_ia_model as guapkcuam, create_user_api_key_can_use_ia_model as cuapkcuam, create_ai_usage_log as caul, get_ai_usage_log as gaul, list_ai_usage_logs as laul
 from .models import ProviderOut, ProviderFilters, ProviderCreate, ProviderUpdate, AiModelUpdate, AiModelOut, AiModelCreate, AiModelFilters, UserApiKeyCreate, UserApiKeyFilters, UserApiKeyOut,UserApiKeyUpdate, AgentOut, AgentCreate, AgentUpdate, AgentFilters, AgentModelCreate, AgentModelOut, AgentModelFilters, AgentModelUpdate, UserApiKeyCanUseIaModelCreate, UserApiKeyCanUseIaModelFilters, UserApiKeyCanUseIaModelOut, AiUsageLogFilters, AiUsageLogOut, AiUsageLogCreate
 from typing import Annotated
@@ -33,17 +33,17 @@ def list_providers(filters: Annotated[ProviderFilters, Query()], db: Session = D
     
     return lp(db, _filters)
 
-@provider_router.post("/create", response_model=ProviderOut)
+@provider_router.post("/create", response_model=ProviderOut, dependencies=[Depends(require_admin)])
 def create_provider(new_provider: ProviderCreate, db: Session = Depends(get_db)):
     provider = cp(new_provider, db)
     return provider
 
-@provider_router.put("/update/{identificator}", response_model=ProviderOut)
+@provider_router.put("/update/{identificator}", response_model=ProviderOut, dependencies=[Depends(require_admin)])
 def update_provider(identificator: str, provider_data: ProviderUpdate, db: Session = Depends(get_db)):
     upd_data = up(identificator, provider_data, db)
     return upd_data
 
-@provider_router.delete("/delete/{identificator}")
+@provider_router.delete("/delete/{identificator}", dependencies=[Depends(require_admin)])
 def delete_provider(identificator: str, db: Session = Depends(get_db)):
     sucess = dp(identificator, db)
     return sucess
@@ -66,17 +66,17 @@ def list_ai_models(filters: Annotated[AiModelFilters, Query()], db: Session = De
     
     return lam(db, _filters)
 
-@ai_model_router.post("/create", response_model=AiModelOut)
+@ai_model_router.post("/create", response_model=AiModelOut, dependencies=[Depends(require_admin)])
 def create_ai_model(new_ai_model: AiModelCreate, db: Session = Depends(get_db)):
     ai_model = cam(new_ai_model, db)
     return ai_model
 
-@ai_model_router.put("/update/{identificator}", response_model=AiModelOut)
+@ai_model_router.put("/update/{identificator}", response_model=AiModelOut, dependencies=[Depends(require_admin)])
 def update_ai_model(identificator: str, ai_model_data: AiModelUpdate, db: Session = Depends(get_db)):
     upd_data = uam(identificator, ai_model_data, db)
     return upd_data
 
-@ai_model_router.delete("/elete/{identificator}")
+@ai_model_router.delete("/delete/{identificator}", dependencies=[Depends(require_admin)])
 def delete_ai_model(identificator: str, db: Session = Depends(get_db)):
     sucess = dam(identificator, db)
     return sucess
@@ -132,17 +132,17 @@ def list_agent(filters: Annotated[AgentFilters, Query()], db: Session = Depends(
     
     return la(_filters, db)
 
-@agent_router.post("/create", response_model=AgentOut)
+@agent_router.post("/create", response_model=AgentOut, dependencies=[Depends(require_admin)])
 def create_agent(new_agent: AgentCreate, db: Session = Depends(get_db)):
     agent = ca(new_agent, db)
     return agent
 
-@agent_router.put("/update/{identificator}", response_model=AgentOut)
+@agent_router.put("/update/{identificator}", response_model=AgentOut, dependencies=[Depends(require_admin)])
 def update_agent(identificator: str, agent_data: AgentUpdate, db: Session = Depends(get_db)):
     upd_data = ua(identificator, agent_data, db)
     return upd_data
 
-@agent_router.delete("/delete/{identificator}")
+@agent_router.delete("/delete/{identificator}", dependencies=[Depends(require_admin)])
 def delete_agent(identificator: str, db: Session = Depends(get_db)):
     sucess = da(identificator, db)
     return sucess
@@ -165,17 +165,17 @@ def list_agent_model(filters: Annotated[AgentModelFilters, Query()], db: Session
     
     return laml(_filters, db)
 
-@agent_model_router.post("/create", response_model=AgentModelOut)
+@agent_model_router.post("/create", response_model=AgentModelOut, dependencies=[Depends(require_admin)])
 def create_agent_model(new_agent_model: AgentModelCreate, db: Session = Depends(get_db)):
     agent_model = caml(new_agent_model, db)
     return agent_model
 
-@agent_model_router.put("/update/{identificator}", response_model=AgentModelOut)
+@agent_model_router.put("/update/{identificator}", response_model=AgentModelOut, dependencies=[Depends(require_admin)])
 def update_agent_model(identificator: str, agent_model_data: AgentModelUpdate, db: Session = Depends(get_db)):
     upd_data = uaml(identificator, agent_model_data, db)
     return upd_data
 
-@agent_model_router.delete("/delete/{identificator}")
+@agent_model_router.delete("/delete/{identificator}", dependencies=[Depends(require_admin)])
 def delete_agent_model(identificator: str, db: Session = Depends(get_db)):
     sucess = daml(identificator, db)
     return sucess

@@ -13,7 +13,8 @@ class ProviderOut(BaseModel):
     id: UUID
     slug: str
     display_name: str
-    base_url: str
+    base_url: str | None
+    protocol: str
     is_active: bool | None
     created_at: datetime | None
     updated_at: datetime| None
@@ -30,12 +31,14 @@ class ProviderFilters(BaseModel):
 class ProviderCreate(BaseModel):
     slug: str
     display_name: str
-    base_url: str
+    base_url: str | None = None
+    protocol: str = "native"
 
 class ProviderUpdate(BaseModel):
     slug: Optional[str | None] = None
     display_name: Optional[str | None] = None
     base_url: Optional[str | None ]= None
+    protocol: Optional[str | None] = None
     is_active: Optional[bool | None] = None
 
 ################    
@@ -48,9 +51,9 @@ class AiModelOut(BaseModel):
     id_ai_provider: UUID
     slug: str
     display_name: str
-    context_window: int
-    input_token_limit: int
-    output_token_limit: int
+    context_window: int | None
+    input_token_limit: int | None
+    output_token_limit: int | None
     supports_vision: bool | None
     is_active: bool | None
     created_at: datetime | None
@@ -104,7 +107,7 @@ class UserApiKeyOut(BaseModel):
 class UserApiKeyCreate(BaseModel):
     id_ai_provider: UUID
     name: str
-    api_key: str
+    api_key: str = ""
     is_active: bool = True
     
 class UserApiKeyUpdate(BaseModel):
@@ -135,6 +138,7 @@ class AgentOut(BaseModel):
     task: TaskType
     base_system_prompt: str
     temperature: Optional[float | None]
+    is_active: bool = True
     created_at: datetime | None
     updated_at: datetime| None
     
@@ -149,6 +153,7 @@ class AgentUpdate(BaseModel):
     task: Optional[TaskType | None] = None
     base_system_prompt: Optional[str | None] = None
     temperature: Optional[float | None] = None
+    is_active: bool | None = None
     
 class AgentFilters(BaseModel):
     id: Optional[UUID  | None] = None
@@ -168,9 +173,10 @@ class AgentModelOut(BaseModel):
     id: UUID
     id_agent: UUID
     id_ai_model: UUID
-    quality_expected: AgentModelQuality
-    custom_system_prompt: str
+    quality_expected: AgentModelQuality | None
+    custom_system_prompt: str | None
     custom_temperature: Optional[float | None]
+    is_active: bool = True
     created_at: datetime | None
     updated_at: datetime| None
     
@@ -187,6 +193,7 @@ class AgentModelUpdate(BaseModel):
     quality_expected: Optional[AgentModelQuality | None] = None
     custom_system_prompt: Optional[str | None] = None
     custom_temperature: Optional[float | None] = None
+    is_active: bool | None = None
     
 class AgentModelFilters(BaseModel):
     id: Optional[UUID  | None] = None

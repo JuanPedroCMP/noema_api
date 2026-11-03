@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import logging
 import importlib
+import asyncio
 from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from ....core.db_models.ai_models import AgentModel, AiModel, UserApiKey
+from ....core.ai_endpoint import validate_ai_endpoint
+from ....core.db_models.ai_models import Agent, AgentModel, AiModel, UserApiKey
 from ....core.security import decrypt, get_current_user
 from ...ai.models import AgentModelFilters, AiUsageLogCreate
 from ...ai.services import (
     create_ai_usage_log,
-    get_agent,
     get_ai_model,
     get_provider,
     get_user_api_key,
@@ -98,11 +100,12 @@ class AiProvider:
         self.user_token = user_token
 
     def _calculate_preference_order(
-        self, agent_id: UUID
+        self, agent_id: UUID, owner_id: UUID
     ) -> list[tuple[AiModel, float, AgentModel]]:
         agent_models = list_agent_models(
             db=self.db,
             filters=AgentModelFilters(id_agent=agent_id),
+            owner_id=owner_id,
         )
         preference_order: list[tuple[AiModel, float, AgentModel]] = []
 
@@ -110,6 +113,7 @@ class AiProvider:
             model = get_ai_model(
                 identificator=str(agent_model.id_ai_model),
                 db=self.db,
+                owner_id=owner_id,
             )
             quality = getattr(agent_model.quality_expected, "value", None)
             quality_score = QUALITY_SCORES.get(quality or "fair", 2.5)
@@ -177,13 +181,13 @@ class AiProvider:
         keys: list[UserApiKey] = []
         for link in links:
             try:
-                keys.append(
-                    get_user_api_key(
-                        token=self.user_token,
-                        identificator=str(link.id_user_api_key),
-                        db=self.db,
-                    )
+                key = get_user_api_key(
+                    token=self.user_token,
+                    identificator=str(link.id_user_api_key),
+                    db=self.db,
                 )
+                if key.is_active:
+                    keys.append(key)
             except Exception:
                 logger.warning(
                     "Unable to load an API key for model %s.",
@@ -211,12 +215,29 @@ class AiProvider:
 
         for api_key in self._get_api_keys(model):
             try:
-                chat_model = init_chat_model(
-                    model.slug,
-                    model_provider=provider.slug,
-                    temperature=temperature,
-                    api_key=decrypt(api_key.encrypted_key),
-                )
+                decrypted_key = decrypt(api_key.encrypted_key)
+                if provider.protocol == "openai_compatible":
+                    if not provider.base_url:
+                        raise RuntimeError(
+                            f"Provider '{provider.display_name}' has no base URL."
+                        )
+                    await asyncio.to_thread(
+                        validate_ai_endpoint, provider.base_url
+                    )
+                    chat_model = init_chat_model(
+                        model.slug,
+                        model_provider="openai",
+                        temperature=temperature,
+                        api_key=decrypted_key or "local",
+                        base_url=provider.base_url,
+                    )
+                else:
+                    chat_model = init_chat_model(
+                        model.slug,
+                        model_provider=provider.slug,
+                        temperature=temperature,
+                        api_key=decrypted_key,
+                    )
                 structured_model = chat_model.with_structured_output(
                     response_model,
                     include_raw=True,
@@ -284,16 +305,30 @@ class AiProvider:
         if not user_prompt.strip():
             raise ValueError("The user prompt cannot be empty.")
 
-        agent = get_agent(str(agent_id), self.db)
+        user = get_current_user(token=self.user_token, db=self.db)
+        agent = self.db.scalar(
+            select(Agent).where(
+                Agent.id == agent_id,
+                or_(Agent.id_user.is_(None), Agent.id_user == user.id),
+                Agent.is_active.is_(True),
+            )
+        )
+        if agent is None:
+            raise RuntimeError("Agent not found.")
         response_model = self._get_response_model(agent.task)
         failures: list[str] = []
 
-        for model, _, agent_model in self._calculate_preference_order(agent_id):
+        for model, _, agent_model in self._calculate_preference_order(
+            agent_id, user.id
+        ):
             try:
                 provider = get_provider(
                     db=self.db,
                     identificator=str(model.id_ai_provider),
+                    owner_id=user.id,
                 )
+                if model.is_active is False or provider.is_active is False:
+                    continue
                 system_prompt, temperature = self._get_prompt_settings(
                     agent, agent_model
                 )
