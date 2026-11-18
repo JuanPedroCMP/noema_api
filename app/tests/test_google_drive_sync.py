@@ -37,6 +37,7 @@ from app.modules.google_drive.models import (
     BackupMetadataCreate,
     BackupMetadataUpdate,
     GoogleAccountLinkRequest,
+    GoogleAccountStatusOut,
     SnapshotManifest,
     SyncLogCreate,
     SyncLogOut,
@@ -244,7 +245,7 @@ def test_new_routes_require_authentication_and_have_no_file_transfer_contract():
     assert "multipart/form-data" not in serialized
 
 
-def test_snapshot_upload_accepts_multipart_form_fields():
+def test_snapshot_upload_is_retired_and_does_not_accept_file_bodies():
     app = FastAPI()
     app.include_router(transfer_router)
     app.dependency_overrides[get_db] = lambda: FakeDB()
@@ -253,31 +254,8 @@ def test_snapshot_upload_accepts_multipart_form_fields():
 
     schema = app.openapi()
     operation = schema["paths"]["/google_drive/sync/upload"]["post"]
-    request_body = operation["requestBody"]["content"]["multipart/form-data"]["schema"]
-    schema_name = request_body["$ref"].rsplit("/", maxsplit=1)[-1]
-    body_schema = schema["components"]["schemas"][schema_name]
-
-    assert set(body_schema["required"]) >= {
-        "id_google_account",
-        "local_ref",
-        "snapshot_version",
-        "content_hash",
-        "manifest",
-        "idempotency_key",
-        "upload",
-    }
-    assert not {
-        parameter["name"]
-        for parameter in operation.get("parameters", [])
-        if parameter["in"] == "query"
-    } & {
-        "id_google_account",
-        "local_ref",
-        "snapshot_version",
-        "content_hash",
-        "manifest",
-        "idempotency_key",
-    }
+    assert "requestBody" not in operation
+    assert "multipart/form-data" not in str(operation)
 
     response = TestClient(app).post(
         "/google_drive/sync/upload",
@@ -291,45 +269,49 @@ def test_snapshot_upload_accepts_multipart_form_fields():
         },
         files={"upload": ("snapshot.json", b"{}", "application/json")},
     )
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "snapshot_validation_failed"
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "client_side_drive_sync_required"
 
 
-def test_snapshot_upload_rejects_partial_revision_fields(monkeypatch):
+def test_snapshot_download_is_retired():
     app = FastAPI()
     app.include_router(transfer_router)
-    app.dependency_overrides[get_db] = lambda: FakeDB(scalar_results=[account()])
+    app.dependency_overrides[get_db] = lambda: FakeDB()
     app.dependency_overrides[oauth2_scheme] = lambda: "test-noema-token"
     app.dependency_overrides[api_rate_limit] = lambda: None
-    monkeypatch.setattr(
-        google_drive_router,
-        "get_current_user",
-        lambda _token, _db: SimpleNamespace(id=USER_ID),
-    )
-    response = TestClient(app).post(
-        "/google_drive/sync/upload",
-        data={
-            "id_google_account": str(ACCOUNT_ID),
-            "local_ref": "primary-snapshot",
-            "snapshot_version": "17",
-            "content_hash": "5c2d7f0bb5921471021c99efb2e357d5",
-            "manifest": (
-                '{"format":"noema-snapshot","schema_version":1,'
-                '"snapshot_version":"17","created_at":"2026-10-31T00:00:00Z",'
-                '"installation_id":"install-7d2c",'
-                '"included_categories":["local_library"],'
-                '"excluded_categories":["global_preferences"],'
-                '"counts":{"local_library":12},'
-                '"hashes":{"local_library":"sha256:5c2d7f0bb5921471021c99efb2e357d5"}}'
-            ),
-            "idempotency_key": "37d19871-7e6a-4b1f-bcff-53dc0d397a44",
-            "expected_drive_version": "42",
-        },
-        files={"upload": ("snapshot.json", b"{}", "application/json")},
+    response = TestClient(app).get(
+        f"/google_drive/sync/download/{BACKUP_ID}",
+        params={"id_google_account": str(ACCOUNT_ID)},
     )
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "backup_revision_fields_required"
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "client_side_drive_sync_required"
+
+
+def test_drive_file_listing_and_delete_are_retired_from_the_api():
+    app = FastAPI()
+    app.include_router(transfer_router)
+    app.dependency_overrides[get_db] = lambda: FakeDB()
+    app.dependency_overrides[oauth2_scheme] = lambda: "test-noema-token"
+    app.dependency_overrides[api_rate_limit] = lambda: None
+    client = TestClient(app)
+
+    responses = (
+        client.get(
+            "/google_drive/sync/files",
+            params={"id_google_account": str(ACCOUNT_ID)},
+        ),
+        client.delete(
+            f"/google_drive/sync/files/{BACKUP_ID}",
+            params={"id_google_account": str(ACCOUNT_ID)},
+        ),
+    )
+
+    assert [response.status_code for response in responses] == [410, 410]
+    assert all(
+        response.json()["detail"]["code"] == "client_side_drive_sync_required"
+        for response in responses
+    )
 
 
 def test_sync_advisory_lock_uses_postgres_int32_key_pair():
@@ -671,12 +653,30 @@ def test_link_status_reflects_verified_granted_and_missing_scopes(
     assert stored.refresh_token_enc is None
 
 
-def test_native_google_link_route_is_retired_without_token_schema():
+def test_native_google_link_route_verifies_client_tokens(monkeypatch):
     app = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: FakeDB()
     app.dependency_overrides[oauth2_scheme] = lambda: "test-noema-token"
     app.dependency_overrides[api_rate_limit] = lambda: None
     app.dependency_overrides[google_oauth_rate_limit] = lambda: None
+    expected_status = GoogleAccountStatusOut(
+        account_id=ACCOUNT_ID,
+        google_email="reader@example.com",
+        state="granted",
+        drive_appdata_granted=True,
+        sync_available=True,
+        granted_scopes=[GOOGLE_DRIVE_APPDATA_SCOPE],
+        checked_at=datetime(2026, 10, 31, tzinfo=timezone.utc),
+        error=None,
+    )
+
+    async def link_account(_token, payload, _db):
+        assert payload.google_id_token.get_secret_value() == "short-lived-id-token"
+        assert payload.google_access_token.get_secret_value() == "short-lived-access-token"
+        return expected_status
+
+    monkeypatch.setattr(google_drive_router, "link_google_account", link_account)
 
     response = TestClient(app).post(
         "/google_drive/account/link",
@@ -688,9 +688,10 @@ def test_native_google_link_route_is_retired_without_token_schema():
 
     schema = app.openapi()
     link_operation = schema["paths"]["/google_drive/account/link"]["post"]
-    assert response.status_code == 410
-    assert response.json()["detail"]["code"] == "server_oauth_required"
-    assert "requestBody" not in link_operation
+    assert response.status_code == 200
+    assert response.json()["sync_available"] is True
+    assert "requestBody" in link_operation
+    assert link_operation["requestBody"]["required"] is True
 
 
 def test_link_google_account_rejects_identity_owned_by_another_user(monkeypatch):

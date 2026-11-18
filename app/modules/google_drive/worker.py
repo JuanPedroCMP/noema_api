@@ -18,12 +18,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
-from ...core.db_models.google_drive_models import (
-    BackupFile,
-    GoogleAccount,
-    SyncOperation,
-)
-from .server_oauth import drive_request
+from ...core.db_models.google_drive_models import SyncOperation
 
 MAX_ATTEMPTS = 8
 STUCK_OPERATION_TIMEOUT = timedelta(minutes=15)
@@ -163,117 +158,21 @@ def claim_operation(db: Session, operation_id: UUID) -> SyncOperation | None:
 
 
 async def process_operation(db: Session, operation_id: UUID) -> SyncOperation | None:
-    """Claim and execute one operation, returning its durable final state."""
-    operation = claim_operation(db, operation_id)
+    """Fail queued legacy work without contacting Google Drive."""
+    operation = db.get(SyncOperation, operation_id)
     if operation is None:
-        return db.get(SyncOperation, operation_id)
-    try:
-        account = db.scalar(
-            select(GoogleAccount).where(
-                GoogleAccount.id == operation.id_google_account,
-                GoogleAccount.id_user == operation.id_user,
-            )
-        )
-        if account is None or not account.is_active:
-            raise HTTPException(status_code=409, detail={"code": "resource_not_found"})
-        payload = operation.request_payload or {}
-        if operation.operation_kind == "list":
-            response = await drive_request(
-                account,
-                db,
-                "GET",
-                "/files",
-                params={
-                    "spaces": "appDataFolder",
-                    "fields": "files(id,name,version,size,appProperties)",
-                },
-            )
-            if response.status_code >= 400:
-                raise HTTPException(status_code=502, detail={"code": "drive_list_failed"})
-            body = response.json()
-            operation.result_payload = {"files": body.get("files", [])}
-        elif operation.operation_kind in {"download", "metadata", "delete"}:
-            backup = db.scalar(
-                select(BackupFile).where(
-                    BackupFile.id == operation.id_backup_file,
-                    BackupFile.id_google_account == account.id,
-                    BackupFile.operation_state == "completed",
-                )
-            )
-            if backup is None:
-                raise HTTPException(status_code=404, detail={"code": "resource_not_found"})
-            metadata = await drive_request(
-                account,
-                db,
-                "GET",
-                f"/files/{backup.drive_file_id}",
-                params={"fields": "id,parents,appProperties,version,size"},
-            )
-            remote = metadata.json() if metadata.status_code < 400 else {}
-            if (
-                metadata.status_code >= 400
-                or "appDataFolder" not in (remote.get("parents") or [])
-                or remote.get("appProperties", {}).get("noema_local_ref")
-                != backup.local_ref
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail={"code": "drive_revision_conflict"},
-                )
-            if operation.operation_kind == "download":
-                operation.result_payload = {
-                    "drive_file_id": backup.drive_file_id,
-                    "drive_version": str(remote.get("version", "")),
-                }
-            elif operation.operation_kind == "metadata":
-                backup.drive_version = str(remote.get("version", backup.drive_version))
-                backup.drive_etag = metadata.headers.get("etag") or backup.drive_etag
-                backup.updated_at = datetime.now(timezone.utc)
-            else:
-                expected = payload.get("if_match") or backup.drive_etag or backup.drive_version
-                response = await drive_request(
-                    account,
-                    db,
-                    "DELETE",
-                    f"/files/{backup.drive_file_id}",
-                    headers={"If-Match": expected} if expected else {},
-                )
-                if response.status_code == 412:
-                    raise HTTPException(
-                        status_code=409,
-                        detail={"code": "drive_revision_conflict"},
-                    )
-                if response.status_code not in {200, 204, 404}:
-                    raise HTTPException(status_code=502, detail={"code": "drive_delete_failed"})
-                db.delete(backup)
-        elif operation.operation_kind == "upload":
-            raise HTTPException(
-                status_code=422,
-                detail={"code": "upload_requires_transfer_endpoint"},
-            )
-        else:
-            raise HTTPException(status_code=422, detail={"code": "invalid_operation_kind"})
-        operation.state = "completed"
-        operation.error_code = None
+        return None
+    if operation.state in {"pending", "uploading"}:
+        operation.state = "failed"
+        operation.error_code = "client_side_drive_sync_required"
         operation.next_attempt_at = None
         operation.updated_at = datetime.now(timezone.utc)
         db.commit()
-    except HTTPException as exc:
-        mark_failed(
-            db,
-            operation_id,
-            str((exc.detail or {}).get("code", "operation_failed"))
-            if isinstance(exc.detail, dict)
-            else "operation_failed",
-            retryable=exc.status_code >= 500,
-        )
-    except Exception:
-        mark_failed(db, operation_id, "worker_failure", retryable=True)
-    return db.get(SyncOperation, operation_id)
+    return operation
 
 
 async def process_pending_operations(db: Session, limit: int = 20) -> int:
-    """Recover stale rows and process due rows in one worker poll."""
+    """Retire queued legacy work without performing Drive requests."""
     recover_stuck_operations(db)
     ids = list(
         db.scalars(
