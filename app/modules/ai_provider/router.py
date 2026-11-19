@@ -1,7 +1,8 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from sqlalchemy import func, select
 from app.modules.ai_provider.models import ExternalResourcesOut, GbBook, S2SearchResult, SearchQueries, TavilyResponse, YtSearchResult
 from app.modules.ai_provider.services.services import (
     get_books,
@@ -10,6 +11,7 @@ from app.modules.ai_provider.services.services import (
     get_videos,
 )
 from .services.ai_compatibility_layer import AiProvider
+from ...core.db_models.user_config_models import Language
 from sqlalchemy.orm import Session
 from ...core.database import get_db
 from ...core.security import oauth2_scheme
@@ -23,9 +25,35 @@ router = APIRouter(
 logger = logging.getLogger(__name__)
 
 @router.post("/use_ai")
-async def use_ai(user_prompt: str, agent_id: UUID, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+async def use_ai(
+    user_prompt: str,
+    agent_id: UUID,
+    response_language: str | None = Header(
+        default=None,
+        alias="X-Response-Language",
+        max_length=100,
+    ),
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
+    language = None
+    if response_language is not None and response_language.strip():
+        language = db.scalar(
+            select(Language.name).where(
+                func.lower(Language.name) == response_language.strip().casefold()
+            )
+        )
+        if language is None:
+            raise HTTPException(
+                status_code=422,
+                detail="The requested response language is not supported.",
+            )
     ai_provider = AiProvider(db=db, user_token=token)
-    result = await ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt)
+    result = await ai_provider.call_ai(
+        agent_id=agent_id,
+        user_prompt=user_prompt,
+        response_language=language,
+    )
     return result
 
 @router.post("/get_materials")

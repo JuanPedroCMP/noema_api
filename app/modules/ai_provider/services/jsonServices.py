@@ -274,9 +274,8 @@ class JsonHelper:
                 errors.append(exc)
 
         message = (
-            "Não foi possível converter a resposta do modelo para JSON.\n"
-            f"Resposta recebida:\n{text[:4000]}\n"
-            f"Tentativas realizadas: {len(errors)}"
+            "Não foi possível converter a resposta do modelo para JSON. "
+            f"Tentativas realizadas: {len(errors)}."
         )
 
         raise ValueError(message) from (
@@ -388,12 +387,13 @@ class JsonHelper:
             return schema.model_validate(arguments)
 
         except ValidationError as exc:
+            validation_details = "; ".join(
+                f"{'.'.join(str(part) for part in issue['loc'])}: {issue['msg']}"
+                for issue in exc.errors(include_input=False)
+            )
 
             raise ValueError(
                 "O JSON foi recuperado, mas não corresponde ao schema "
-                f"{schema.__name__}.\n"
-                f"Dados recuperados:\n"
-                f"{json.dumps(arguments, ensure_ascii=False, indent=2)}\n"
-                f"Erros de validação:\n{exc}"
+                f"{schema.__name__}. Erros de validação: {validation_details}"
             ) from exc
         

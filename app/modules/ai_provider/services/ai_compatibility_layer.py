@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 import importlib
 import asyncio
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -290,21 +292,46 @@ class AiProvider:
                         ("human", "{user_prompt}"),
                     ]
                 )
-                result = await (prompt | structured_model).ainvoke(
+                structured_chain = prompt | structured_model
+                result = await structured_chain.ainvoke(
                     {"user_prompt": user_prompt}
                 )
-                if not isinstance(result, Mapping):
-                    raise ValueError("The AI provider returned an invalid response.")
-
-                parsed = result.get("parsed")
-                raw_response = result.get("raw")
-                if parsed is None:
-                    raw_content = getattr(raw_response, "content", raw_response)
-                    parsed = self._try_recover_response(
-                        raw_content,
-                        response_model,
+                try:
+                    return self._parse_model_result(result, response_model)
+                except ValueError as validation_error:
+                    raw_text = (
+                        self._extract_raw_text(result.get("raw"))
+                        if isinstance(result, Mapping)
+                        else None
                     )
-                return parsed, raw_response
+                    correction_prompt = (
+                        f"{user_prompt}\n\n"
+                        "The previous response did not satisfy the required "
+                        f"{response_model.__name__} data model. Correct the response "
+                        "without changing its intended meaning. Include every required "
+                        "field, use the expected types and allowed values, and return "
+                        "only the corrected structured response.\n"
+                        f"Validation issue: {str(validation_error)[:1500]}"
+                    )
+                    if raw_text:
+                        correction_prompt += (
+                            "\nPrevious response to correct:\n"
+                            f"{raw_text[:3000]}"
+                        )
+
+                    corrected_result = await structured_chain.ainvoke(
+                        {"user_prompt": correction_prompt}
+                    )
+                    try:
+                        return self._parse_model_result(
+                            corrected_result, response_model
+                        )
+                    except ValueError as correction_error:
+                        raise ValueError(
+                            f"The response did not match "
+                            f"{response_model.__name__} after one correction "
+                            f"attempt: {correction_error}"
+                        ) from correction_error
             except Exception as exc:
                 last_error = exc
                 logger.warning(
@@ -314,8 +341,87 @@ class AiProvider:
                 )
 
         raise RuntimeError(
-            f"All API keys for model '{model.display_name}' failed."
+            f"All API keys for model '{model.display_name}' failed: {last_error}"
         ) from last_error
+
+    def _parse_model_result(
+        self, result: Any, response_model: Any
+    ) -> tuple[Any, Any]:
+        if not isinstance(result, Mapping):
+            raise ValueError("The AI provider returned an invalid response.")
+
+        raw_response = result.get("raw")
+        parsed = result.get("parsed")
+        validation_errors: list[str] = []
+        if parsed is not None:
+            try:
+                return response_model.model_validate(parsed), raw_response
+            except ValidationError as exc:
+                validation_errors.append(self._format_validation_error(exc))
+
+        raw_text = self._extract_raw_text(raw_response)
+        if raw_text:
+            try:
+                return self._try_recover_response(raw_text, response_model), raw_response
+            except (TypeError, ValueError) as exc:
+                validation_errors.append(str(exc))
+
+        details = "; ".join(error for error in validation_errors if error)
+        if not details:
+            details = "No structured data or readable raw response was returned."
+        raise ValueError(
+            f"The response does not match {response_model.__name__}: {details}"
+        )
+
+    @staticmethod
+    def _format_validation_error(error: ValidationError) -> str:
+        issues = error.errors(include_input=False)
+        return "; ".join(
+            f"{'.'.join(str(part) for part in issue['loc'])}: {issue['msg']}"
+            for issue in issues
+        )
+
+    @staticmethod
+    def _extract_raw_text(raw_response: Any) -> str | None:
+        content = getattr(raw_response, "content", raw_response)
+        if isinstance(content, str):
+            return content or None
+        if isinstance(content, Mapping):
+            for key in ("text", "input", "args", "arguments"):
+                value = content.get(key)
+                if isinstance(value, str):
+                    return value
+                if isinstance(value, (Mapping, list)):
+                    return json.dumps(value, ensure_ascii=False, default=str)
+            return json.dumps(content, ensure_ascii=False, default=str)
+        if isinstance(content, Sequence):
+            text_parts: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    text_parts.append(part)
+                elif isinstance(part, Mapping):
+                    for key in ("text", "input", "args", "arguments"):
+                        value = part.get(key)
+                        if isinstance(value, str):
+                            text_parts.append(value)
+                            break
+                        if isinstance(value, (Mapping, list)):
+                            text_parts.append(
+                                json.dumps(value, ensure_ascii=False, default=str)
+                            )
+                            break
+            if text_parts:
+                return "\n".join(text_parts)
+
+        tool_calls = getattr(raw_response, "tool_calls", None)
+        if tool_calls:
+            return json.dumps(
+                {"tool_calls": [{"function": {"arguments": call.get("args")}}
+                                for call in tool_calls]},
+                ensure_ascii=False,
+                default=str,
+            )
+        return None
 
     def _try_recover_response(self, raw_response: Any, response_model: Any) -> Any:
         """Recover malformed structured output when the provider returned text."""
@@ -342,7 +448,12 @@ class AiProvider:
             self.user_token,
         )
 
-    async def call_ai(self, user_prompt: str, agent_id: UUID) -> Any:
+    async def call_ai(
+        self,
+        user_prompt: str,
+        agent_id: UUID,
+        response_language: str | None = None,
+    ) -> Any:
         """Call configured models in preference order with explicit fallbacks."""
         if not user_prompt.strip():
             raise ValueError("The user prompt cannot be empty.")
@@ -361,7 +472,7 @@ class AiProvider:
         failures: list[str] = []
         preference_order = self._calculate_preference_order(agent_id, user.id)
         has_configured_keys = False
-        response_language = self._get_response_language(user.id)
+        response_language = response_language or self._get_response_language(user.id)
 
         for key_source in ("personal", "shared"):
             for model, _, agent_model in preference_order:

@@ -25,9 +25,13 @@ Para usar um modelo com autenticação, crie o provedor e o modelo, cadastre uma
 
 O administrador configurado em `ADMIN_EMAIL` pode cadastrar chaves compartilhadas para provedores globais pelas rotas `/api/v1/ai/shared_api_key/create`, `/list`, `/update/{id}` e `/delete/{id}`. O corpo de criação contém `id_ai_provider`, `name`, `api_key` e, opcionalmente, `is_active`. A chave é criptografada usando `secret_key_api_key_ai`, nunca é retornada pela API e pode ser desativada ou substituída sem expor o valor anterior.
 
+No app, o administrador pode gerenciar essas chaves em **Configurações > Chaves de API**. A seção usa as mesmas rotas protegidas; contas não administradoras não podem listar nem alterar as chaves, e o segredo não é exibido novamente após o cadastro.
+
 Ao gerar uma resposta, a API tenta primeiro todas as chaves pessoais ativas dos modelos do agente, em ordem de preferência. Somente se nenhuma delas funcionar, tenta as chaves compartilhadas ativas, também em ordem de preferência. Cadastre apenas chaves em provedores globais, pois elas poderão ser usadas por qualquer usuário que selecione esses modelos.
 
 O idioma de resposta é o primeiro idioma com ordem definida em `response_language_preference_order` (ordem crescente); se não houver preferência ordenada, usa o idioma da configuração global do usuário. Se nenhum estiver definido, o prompt não recebe uma instrução adicional de idioma.
+
+Respostas estruturadas são validadas contra o modelo Pydantic da tarefa. Quando a saída não valida, a API tenta recuperar o conteúdo bruto e solicita uma única correção ao mesmo modelo; se ainda não corresponder ao schema, não retorna dados inválidos e segue o fallback configurado.
 
 Provedores pessoais usam o protocolo `openai_compatible`, incluindo serviços compatíveis com a API OpenAI, como vLLM, LM Studio, LocalAI, llama.cpp server e Ollama com a API OpenAI ativada. Informe o `base_url` completo, normalmente terminado em `/v1`.
 

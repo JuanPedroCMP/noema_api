@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Json, Field
 from uuid import UUID
@@ -132,10 +132,23 @@ class StudyManagerResponse(BaseModel):
     total_activities: int = Field(default=0, ge=0)
 
 
+class StudyAssistantAction(BaseModel):
+    type: Literal["create_graph", "create_flashcards", "create_exercise", "navigate"]
+    title: str
+    prompt: str = ""
+    destination: Literal[
+        "home", "graphs", "flashcards", "notes", "study_sessions"
+    ] | None = None
+    exercise_type: Literal["multiple_choice", "open_ended"] | None = None
+    graph_id: str | None = None
+    node_id: str | None = None
+
+
 class StudyAssistentResponse(BaseModel):
     feedback: str
     next_activity: str | None = None
     recommendations: list[str] = Field(default_factory=list)
+    actions: list[StudyAssistantAction] = Field(default_factory=list, max_length=3)
 
 ###################
 ### CreateEssayQuestionResponse

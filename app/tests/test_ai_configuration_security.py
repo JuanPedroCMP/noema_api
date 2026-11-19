@@ -320,6 +320,101 @@ def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
     assert all("Respond in Portuguese." in prompt for prompt in invoked_prompts)
 
 
+def test_invalid_structured_response_is_retried_and_validated(monkeypatch):
+    from app.modules.ai_provider.services import ai_compatibility_layer
+    from app.modules.ai_provider.models import CreateFlashcard
+
+    prompts = []
+
+    class Prompt:
+        def __or__(self, _structured_model):
+            return self
+
+        async def ainvoke(self, values):
+            prompts.append(values["user_prompt"])
+            if len(prompts) == 1:
+                return {
+                    "parsed": None,
+                    "raw": SimpleNamespace(
+                        content=[{"type": "text", "text": "not valid JSON"}]
+                    ),
+                    "parsing_error": ValueError("invalid structured output"),
+                }
+            return {
+                "parsed": {
+                    "title": "Title",
+                    "statement": "Statement",
+                    "target_skill": "Recall",
+                },
+                "raw": SimpleNamespace(content="{}"),
+                "parsing_error": None,
+            }
+
+    class PromptTemplate:
+        @staticmethod
+        def from_messages(_messages):
+            return Prompt()
+
+    class ChatModel:
+        def with_structured_output(self, _response_model, include_raw):
+            assert include_raw is True
+            return object()
+
+    monkeypatch.setattr(
+        ai_compatibility_layer,
+        "_import_langchain",
+        lambda: (lambda *_args, **_kwargs: ChatModel(), PromptTemplate),
+    )
+    monkeypatch.setattr(ai_compatibility_layer, "decrypt", lambda _key: "api-key")
+
+    result, _raw = asyncio.run(
+        ai_compatibility_layer.AiProvider(object(), "token")._invoke_model(
+            model=SimpleNamespace(slug="test-model", display_name="Test model"),
+            api_keys=[SimpleNamespace(encrypted_key="encrypted")],
+            provider=SimpleNamespace(protocol="native", slug="test-provider"),
+            system_prompt="Return a flashcard.",
+            temperature=0.3,
+            user_prompt="Create one flashcard.",
+            response_model=CreateFlashcard,
+        )
+    )
+
+    assert isinstance(result, CreateFlashcard)
+    assert result.title == "Title"
+    assert len(prompts) == 2
+    assert "did not satisfy the required CreateFlashcard data model" in prompts[1]
+    assert "not valid JSON" in prompts[1]
+
+
+def test_structured_response_still_rejects_missing_required_fields():
+    from app.modules.ai_provider.services.ai_compatibility_layer import AiProvider
+    from app.modules.ai_provider.models import CreateFlashcard
+
+    with pytest.raises(ValueError, match="does not match CreateFlashcard"):
+        AiProvider(object(), "token")._parse_model_result(
+            {
+                "parsed": {"title": "Title"},
+                "raw": None,
+            },
+            CreateFlashcard,
+        )
+
+
+def test_invalid_json_diagnostic_does_not_include_model_output(monkeypatch):
+    from app.modules.ai_provider.services import jsonServices
+
+    def fail_repair(_text):
+        raise ValueError("could not repair")
+
+    monkeypatch.setattr(jsonServices, "repair_json_loads", fail_repair)
+    raw_output = "private-response-fragment"
+
+    with pytest.raises(ValueError) as error:
+        jsonServices.JsonHelper._decode_json(raw_output)
+
+    assert raw_output not in str(error.value)
+
+
 def test_shared_api_key_is_encrypted_and_never_returned(monkeypatch):
     from app.modules.ai import services
     from app.modules.ai.models import SharedApiKeyCreate, SharedApiKeyOut
@@ -427,3 +522,56 @@ def test_response_language_uses_preference_then_global_setting():
     assert "response_language_preference_order" in db.statements[0]
     assert "preference_order IS NOT NULL" in db.statements[0]
     assert "user_global_config" in db.statements[1]
+
+
+@pytest.mark.asyncio
+async def test_ai_route_forwards_a_validated_response_language(monkeypatch):
+    from app.modules.ai_provider import router
+
+    class Db:
+        def scalar(self, _statement):
+            return "English"
+
+    class Provider:
+        def __init__(self, *, db, user_token):
+            assert db is not None
+            assert user_token == "token"
+
+        async def call_ai(self, *, agent_id, user_prompt, response_language):
+            assert agent_id == uuid4_value
+            assert user_prompt == "prompt"
+            assert response_language == "English"
+            return {"response": "ok"}
+
+    uuid4_value = uuid4()
+    monkeypatch.setattr(router, "AiProvider", Provider)
+
+    result = await router.use_ai(
+        user_prompt="prompt",
+        agent_id=uuid4_value,
+        response_language="english",
+        token="token",
+        db=Db(),
+    )
+
+    assert result == {"response": "ok"}
+
+
+def test_study_assistant_response_schema_includes_frontend_actions():
+    from app.modules.ai_provider.models import StudyAssistentResponse
+
+    response = StudyAssistentResponse.model_validate(
+        {
+            "feedback": "Vamos criar um mapa.",
+            "actions": [
+                {
+                    "type": "create_graph",
+                    "title": "Mapa sobre biologia",
+                    "prompt": "Biologia celular",
+                }
+            ],
+        }
+    )
+
+    assert response.actions[0].type == "create_graph"
+    assert response.actions[0].prompt == "Biologia celular"
