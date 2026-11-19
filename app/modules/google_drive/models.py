@@ -32,6 +32,7 @@ SAFE_LOG_METADATA_KEYS = {
     "snapshot_version",
     "drive_revision",
     "content_hash",
+    "data_hash",
     "file_size_bytes",
     "installation_id",
     "operation_id",
@@ -72,7 +73,7 @@ def _is_safe_log_metadata(key: str, value: Any) -> bool:
         return type(value) is int and 0 <= value <= MAX_BACKUP_SIZE_BYTES
     if not isinstance(value, str) or len(value) > 128:
         return False
-    if key == "content_hash":
+    if key in {"content_hash", "data_hash"}:
         return bool(
             re.fullmatch(r"(?:[A-Za-z0-9_-]{1,16}:)?[A-Fa-f0-9]{16,128}", value)
         )

@@ -1132,6 +1132,7 @@ def test_sync_log_creation_is_owned_idempotent_and_records_client_strategy(monke
         metadata={
             "snapshot_version": "18",
             "content_hash": "sha256:95734f510aa6f18433bc87be9385ea12",
+            "data_hash": "sha256:1234567890abcdef1234567890abcdef",
         },
     )
     db = FakeDB(scalar_results=[device, linked, None])
@@ -1142,6 +1143,10 @@ def test_sync_log_creation_is_owned_idempotent_and_records_client_strategy(monke
     assert created.direction == SyncDirection.UPLOAD
     assert created.conflict_strategy == ConflictStrategy.KEEP_REMOTE
     assert created.metadata_["snapshot_version"] == "18"
+    assert (
+        created.metadata_["data_hash"]
+        == "sha256:1234567890abcdef1234567890abcdef"
+    )
     assert db.commits == 1
 
     retry_db = FakeDB(scalar_results=[device, linked, created])

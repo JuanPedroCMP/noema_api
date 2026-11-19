@@ -21,10 +21,13 @@ The API handles Noema authentication, account status, device and backup
 metadata, optimistic-concurrency checks, and sync history. The client uploads
 to a Drive resumable-upload session and downloads from Drive itself, with
 streaming and a 256 MiB client-side size limit. On update it checks the Drive
-revision from the preview and sends `If-Match`; it refuses to overwrite a
-revision that changed after the user made a decision. A Drive upload that
-succeeds while metadata confirmation fails is recoverable: the next preview
-discovers the Drive file and reconciles its metadata.
+revision from the preview and re-reads the version immediately before opening
+the upload session. When Drive returns an ETag, the client also sends
+`If-Match`. If no ETag is returned, the version re-read detects changes that
+occurred before the request, but cannot provide an atomic precondition against
+a truly simultaneous edit. A Drive upload that succeeds while metadata
+confirmation fails is recoverable: the next preview discovers the Drive file
+and reconciles its metadata.
 
 The old API upload/download routes are retained only to return `410
 client_side_drive_sync_required`; they accept no snapshot body and never
@@ -107,8 +110,9 @@ Typical Flutter sequence:
 The Flutter app owns all snapshot bytes and all Drive file operations. Noema
 accepts only metadata, validates the manifest and ownership, and checks
 metadata revision preconditions. Google Drive `If-Match` checks happen in the
-client's direct Drive request. No backup bytes are accepted or returned by
-the API.
+client's direct Drive request when Drive returns an ETag; otherwise, the client
+uses the Drive version re-read immediately before the update. No backup bytes
+are accepted or returned by the API.
 
 ### Account status
 
@@ -369,6 +373,7 @@ The established `/api/v1/google_drive/backup_file/get/{id}`, `/backup_file/list`
     "snapshot_version": "18",
     "drive_revision": "43",
     "content_hash": "sha256:95734f510aa6f18433bc87be9385ea12",
+    "data_hash": "sha256:1234567890abcdef1234567890abcdef",
     "file_size_bytes": 85200,
     "installation_id": "install-7d2c",
     "operation_id": "op-803"
@@ -408,7 +413,7 @@ Successful `201 Created` response:
 
 The accepted events are `sync_started`, `sync_completed`, `sync_failed`, `conflict_detected`, `authorization_refreshed`, `backup_created`, `backup_updated`, and `backup_deleted`. `derection` accepts `upload` or `download`; clients may send the correctly spelled alias `direction`, but responses preserve the published `derection` field. `result` is `success`, `failure`, or `in_conflict`; `conflict_strategy` is nullable and otherwise one of `keep_local`, `keep_remote`, `merge`, or `duplicate`.
 
-The optional `idempotency_key` is 16–128 characters; callers should supply one for retry safety. Replaying a matching log request returns the existing log (the route continues to respond `201`); reusing its key for different log data returns `409 sync_log_conflict`. `metadata` may contain only these scalar keys: `snapshot_version`, `drive_revision`, `content_hash`, `file_size_bytes`, `installation_id`, and `operation_id`. `file_size_bytes` must be an integer within the backup-size limit; other values must be safe strings up to 128 characters. Do not send free-form errors or any note, prompt, credential, user content, payload, or nested object. Sync-log list filters support `id`, `id_device`, `id_backup_file`, `id_google_account`, `event`, `derection`/`direction`, `result`, and `conflict_strategy`; pagination matches the backup list.
+The optional `idempotency_key` is 16–128 characters; callers should supply one for retry safety. Replaying a matching log request returns the existing log (the route continues to respond `201`); reusing its key for different log data returns `409 sync_log_conflict`. `metadata` may contain only these scalar keys: `snapshot_version`, `drive_revision`, `content_hash`, `data_hash`, `file_size_bytes`, `installation_id`, and `operation_id`. `content_hash` and `data_hash` are bounded hexadecimal digests; `file_size_bytes` must be an integer within the backup-size limit; other values must be safe strings up to 128 characters. The client uses the latest successful per-device `data_hash` as a common baseline: it automatically selects the only side that changed since that sync, and asks when both sides changed. Without a data-hash baseline, it can keep local changes automatically when the remote snapshot was created by this same installation or when the Drive backup predates the device's latest successful sync; otherwise it asks if it cannot establish which side changed. Do not send free-form errors or any note, prompt, credential, user content, payload, or nested object. Sync-log list filters support `id`, `id_device`, `id_backup_file`, `id_google_account`, `event`, `derection`/`direction`, `result`, and `conflict_strategy`; pagination matches the backup list.
 
 ## HTTP errors and client handling
 
