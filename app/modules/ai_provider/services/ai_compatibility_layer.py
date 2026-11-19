@@ -67,6 +67,7 @@ QUALITY_SCORES = {
     "very_good": 7.5,
     "excellent": 10.0,
 }
+AI_MODEL_REQUEST_TIMEOUT_SECONDS = 45
 
 # Keep every planned task here. Some response classes are intentionally not
 # defined yet and can be added to app.modules.ai_provider.models later.
@@ -106,6 +107,8 @@ def _import_langchain() -> tuple[Any, Any]:
 
 
 def _format_provider_error(error: Exception) -> str:
+    if isinstance(error, TimeoutError):
+        return "Timed out waiting for the model provider."
     message = str(error)
     if any(
         marker in message.casefold()
@@ -323,8 +326,9 @@ class AiProvider:
                     ]
                 )
                 structured_chain = prompt | structured_model
-                result = await structured_chain.ainvoke(
-                    {"user_prompt": user_prompt}
+                result = await asyncio.wait_for(
+                    structured_chain.ainvoke({"user_prompt": user_prompt}),
+                    timeout=AI_MODEL_REQUEST_TIMEOUT_SECONDS,
                 )
                 try:
                     return self._parse_model_result(result, response_model)
@@ -349,8 +353,11 @@ class AiProvider:
                             f"{raw_text[:3000]}"
                         )
 
-                    corrected_result = await structured_chain.ainvoke(
-                        {"user_prompt": correction_prompt}
+                    corrected_result = await asyncio.wait_for(
+                        structured_chain.ainvoke(
+                            {"user_prompt": correction_prompt}
+                        ),
+                        timeout=AI_MODEL_REQUEST_TIMEOUT_SECONDS,
                     )
                     try:
                         return self._parse_model_result(

@@ -23,6 +23,7 @@ router = APIRouter(
     tags=["ai_router"]
 )
 logger = logging.getLogger(__name__)
+AI_GENERATION_TIMEOUT_SECONDS = 105
 
 @router.post("/use_ai")
 async def use_ai(
@@ -49,11 +50,22 @@ async def use_ai(
                 detail="The requested response language is not supported.",
             )
     ai_provider = AiProvider(db=db, user_token=token)
-    result = await ai_provider.call_ai(
-        agent_id=agent_id,
-        user_prompt=user_prompt,
-        response_language=language,
-    )
+    logger.info("Starting AI generation for agent %s.", agent_id)
+    try:
+        result = await asyncio.wait_for(
+            ai_provider.call_ai(
+                agent_id=agent_id,
+                user_prompt=user_prompt,
+                response_language=language,
+            ),
+            timeout=AI_GENERATION_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        logger.error("AI generation timed out for agent %s.", agent_id)
+        raise HTTPException(
+            status_code=504,
+            detail="AI generation timed out. Please try again or select another model.",
+        ) from exc
     return result
 
 @router.post("/get_materials")

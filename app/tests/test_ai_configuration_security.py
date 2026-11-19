@@ -427,6 +427,33 @@ def test_malformed_tool_error_does_not_expose_generated_arguments():
     assert "model output" not in message
 
 
+def test_ai_generation_timeout_returns_gateway_timeout(monkeypatch):
+    from app.modules.ai_provider import router
+
+    class HungProvider:
+        async def call_ai(self, **_kwargs):
+            await asyncio.sleep(1)
+
+    monkeypatch.setattr(
+        router, "AiProvider", lambda **_kwargs: HungProvider()
+    )
+    monkeypatch.setattr(router, "AI_GENERATION_TIMEOUT_SECONDS", 0.001)
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            router.use_ai(
+                user_prompt="prompt",
+                agent_id=uuid4(),
+                response_language=None,
+                token="token",
+                db=object(),
+            )
+        )
+
+    assert error.value.status_code == 504
+    assert "timed out" in error.value.detail.lower()
+
+
 def test_structured_response_still_rejects_missing_required_fields():
     from app.modules.ai_provider.services.ai_compatibility_layer import AiProvider
     from app.modules.ai_provider.models import CreateFlashcard
