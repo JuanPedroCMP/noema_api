@@ -25,6 +25,26 @@ router = APIRouter(
 logger = logging.getLogger(__name__)
 AI_GENERATION_TIMEOUT_SECONDS = 75
 
+
+def _resolve_response_language(
+    db: Session,
+    response_language: str | None,
+) -> str | None:
+    if response_language is None or not response_language.strip():
+        return None
+    language = db.scalar(
+        select(Language.name).where(
+            func.lower(Language.name) == response_language.strip().casefold()
+        )
+    )
+    if language is None:
+        raise HTTPException(
+            status_code=422,
+            detail="The requested response language is not supported.",
+        )
+    return language
+
+
 @router.post("/use_ai")
 async def use_ai(
     user_prompt: str,
@@ -37,18 +57,7 @@ async def use_ai(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ):
-    language = None
-    if response_language is not None and response_language.strip():
-        language = db.scalar(
-            select(Language.name).where(
-                func.lower(Language.name) == response_language.strip().casefold()
-            )
-        )
-        if language is None:
-            raise HTTPException(
-                status_code=422,
-                detail="The requested response language is not supported.",
-            )
+    language = _resolve_response_language(db, response_language)
     ai_provider = AiProvider(db=db, user_token=token)
     logger.info("Starting AI generation for agent %s.", agent_id)
     try:
@@ -72,6 +81,11 @@ async def use_ai(
 async def get_materials(
     user_prompt: str,
     agent_id: UUID,
+    response_language: str | None = Header(
+        default=None,
+        alias="X-Response-Language",
+        max_length=100,
+    ),
     include_videos: bool = Query(True, alias="get_videos"),
     include_books: bool = Query(True, alias="get_books"),
     include_papers: bool = Query(True, alias="get_papers"),
@@ -79,8 +93,23 @@ async def get_materials(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ):
+    language = _resolve_response_language(db, response_language)
     ai_provider = AiProvider(db=db, user_token=token)
-    result : SearchQueries = await ai_provider.call_ai(agent_id = agent_id, user_prompt = user_prompt) ## Gerar o pronpt para cada pesquisa TODO: Fazer modelo pydantic para gerar os dados
+    try:
+        result: SearchQueries = await asyncio.wait_for(
+            ai_provider.call_ai(
+                agent_id=agent_id,
+                user_prompt=user_prompt,
+                response_language=language,
+            ),
+            timeout=AI_GENERATION_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        logger.error("Resource recommendation timed out for agent %s.", agent_id)
+        raise HTTPException(
+            status_code=504,
+            detail="Resource recommendation timed out. Please try again.",
+        ) from exc
     # ## Pega o pronpt e faz cada pesquisa
     # print(result.paper_query)
     
