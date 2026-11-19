@@ -321,14 +321,31 @@ def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("model_slug", "provider_slug", "expected_provider", "expected_method"),
+    (
+        "model_slug",
+        "provider_slug",
+        "expected_provider",
+        "expected_method",
+        "expected_client_options",
+    ),
     [
-        ("test-model", "google", "google_genai", None),
-        ("openai/gpt-oss-120b", "groq", "groq", "json_mode"),
+        ("test-model", "google", "google_genai", None, {}),
+        (
+            "openai/gpt-oss-120b",
+            "groq",
+            "groq",
+            "json_mode",
+            {"max_retries": 0, "timeout": 28},
+        ),
     ],
 )
 def test_invalid_structured_response_is_retried_and_validated(
-    monkeypatch, model_slug, provider_slug, expected_provider, expected_method
+    monkeypatch,
+    model_slug,
+    provider_slug,
+    expected_provider,
+    expected_method,
+    expected_client_options,
 ):
     from app.modules.ai_provider.services import ai_compatibility_layer
     from app.modules.ai_provider.models import CreateFlashcard
@@ -336,6 +353,7 @@ def test_invalid_structured_response_is_retried_and_validated(
     prompts = []
     system_prompts = []
     structured_methods = []
+    model_options = []
 
     class Prompt:
         def __or__(self, _structured_model):
@@ -379,6 +397,13 @@ def test_invalid_structured_response_is_retried_and_validated(
 
     def init_chat_model(*_args, **kwargs):
         model_providers.append(kwargs["model_provider"])
+        model_options.append(
+            {
+                key: kwargs[key]
+                for key in ("max_retries", "timeout")
+                if key in kwargs
+            }
+        )
         return ChatModel()
 
     monkeypatch.setattr(
@@ -404,6 +429,7 @@ def test_invalid_structured_response_is_retried_and_validated(
     assert result.title == "Title"
     assert model_providers == [expected_provider]
     assert structured_methods == [expected_method]
+    assert model_options == [expected_client_options]
     if expected_method == "json_mode":
         assert "Return only JSON matching the following JSON Schema:" in system_prompts[0]
         assert '"target_skill"' in system_prompts[0]

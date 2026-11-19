@@ -7,6 +7,7 @@ import importlib
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
+from time import perf_counter
 from typing import Any
 from uuid import UUID
 
@@ -67,7 +68,8 @@ QUALITY_SCORES = {
     "very_good": 7.5,
     "excellent": 10.0,
 }
-AI_MODEL_REQUEST_TIMEOUT_SECONDS = 45
+AI_MODEL_REQUEST_TIMEOUT_SECONDS = 30
+AI_MODEL_HTTP_TIMEOUT_SECONDS = 28
 
 # Keep every planned task here. Some response classes are intentionally not
 # defined yet and can be added to app.modules.ai_provider.models later.
@@ -275,6 +277,7 @@ class AiProvider:
         last_error: Exception | None = None
 
         for api_key in api_keys:
+            attempt_started = perf_counter()
             try:
                 decrypted_key = decrypt(api_key.encrypted_key)
                 if provider.protocol == "openai_compatible":
@@ -291,6 +294,8 @@ class AiProvider:
                         temperature=temperature,
                         api_key=decrypted_key or "local",
                         base_url=provider.base_url,
+                        max_retries=0,
+                        timeout=AI_MODEL_HTTP_TIMEOUT_SECONDS,
                     )
                 else:
                     model_provider = (
@@ -298,11 +303,20 @@ class AiProvider:
                         if provider.slug.casefold() == "google"
                         else provider.slug
                     )
+                    client_options = (
+                        {
+                            "max_retries": 0,
+                            "timeout": AI_MODEL_HTTP_TIMEOUT_SECONDS,
+                        }
+                        if model_provider in {"openai", "groq"}
+                        else {}
+                    )
                     chat_model = init_chat_model(
                         model.slug,
                         model_provider=model_provider,
                         temperature=temperature,
                         api_key=decrypted_key,
+                        **client_options,
                     )
                 structured_output_options: dict[str, str] = {}
                 if model.slug.rsplit("/", 1)[-1].casefold().startswith(
@@ -331,7 +345,15 @@ class AiProvider:
                     timeout=AI_MODEL_REQUEST_TIMEOUT_SECONDS,
                 )
                 try:
-                    return self._parse_model_result(result, response_model)
+                    parsed, raw_response = self._parse_model_result(
+                        result, response_model
+                    )
+                    logger.info(
+                        "AI model %s completed in %.2fs.",
+                        model.display_name,
+                        perf_counter() - attempt_started,
+                    )
+                    return parsed, raw_response
                 except ValueError as validation_error:
                     raw_text = (
                         self._extract_raw_text(result.get("raw"))
@@ -360,9 +382,15 @@ class AiProvider:
                         timeout=AI_MODEL_REQUEST_TIMEOUT_SECONDS,
                     )
                     try:
-                        return self._parse_model_result(
+                        parsed, raw_response = self._parse_model_result(
                             corrected_result, response_model
                         )
+                        logger.info(
+                            "AI model %s completed after response repair in %.2fs.",
+                            model.display_name,
+                            perf_counter() - attempt_started,
+                        )
+                        return parsed, raw_response
                     except ValueError as correction_error:
                         raise ValueError(
                             f"The response did not match "
@@ -372,9 +400,10 @@ class AiProvider:
             except Exception as exc:
                 last_error = exc
                 logger.warning(
-                    "AI request failed for model %s; trying another key.",
+                    "AI model %s failed after %.2fs: %s",
                     model.display_name,
-                    exc_info=True,
+                    perf_counter() - attempt_started,
+                    _format_provider_error(exc),
                 )
 
         raise RuntimeError(
