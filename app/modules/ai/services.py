@@ -1,10 +1,11 @@
-from ...core.db_models.ai_models import AiProvider, AiModel, UserApiKey, Agent, AgentModel, UserApiKeyCanUseIaModel, AiUsageLog
+from ...core.db_models.ai_models import AiProvider, AiModel, UserApiKey, SharedApiKey, Agent, AgentModel, UserApiKeyCanUseIaModel, AiUsageLog
 from ...core.security import decrypt, get_current_user, encrypt
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_, and_
 from fastapi import HTTPException, status
+from typing import Any
 from uuid import UUID, uuid4
-from .models import ProviderCreate, ProviderUpdate, AiModelCreate, AiModelUpdate, UserApiKeyCreate, UserApiKeyUpdate, AgentCreate, AgentUpdate, AgentFilters, AgentModelCreate, AgentModelUpdate, AgentModelFilters, UserApiKeyCanUseIaModelCreate, UserApiKeyCanUseIaModelFilters, AiUsageLogFilters, AiUsageLogCreate
+from .models import ProviderCreate, ProviderUpdate, AiModelCreate, AiModelUpdate, UserApiKeyCreate, UserApiKeyUpdate, SharedApiKeyCreate, SharedApiKeyUpdate, AgentCreate, AgentUpdate, AgentFilters, AgentModelCreate, AgentModelUpdate, AgentModelFilters, UserApiKeyCanUseIaModelCreate, AiUsageLogFilters, AiUsageLogCreate
 from datetime import datetime
 
 ################
@@ -291,6 +292,112 @@ def delete_user_api_key(token: str, identificator: str, db: Session) -> bool:
     db.commit()
     return True
 
+
+################
+### Shared API Key
+################
+
+def list_shared_api_keys(db: Session) -> list[SharedApiKey]:
+    return list(
+        db.scalars(
+            select(SharedApiKey).order_by(
+                SharedApiKey.id_ai_provider, SharedApiKey.name
+            )
+        ).all()
+    )
+
+
+def get_shared_api_key(identificator: str, db: Session) -> SharedApiKey:
+    try:
+        key_id = UUID(identificator)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Shared API key not found.",
+        ) from exc
+
+    shared_api_key = db.scalar(
+        select(SharedApiKey).where(SharedApiKey.id == key_id)
+    )
+    if shared_api_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Shared API key not found.",
+        )
+    return shared_api_key
+
+
+def create_shared_api_key(
+    create_data: SharedApiKeyCreate, db: Session
+) -> SharedApiKey:
+    get_provider(create_data.id_ai_provider, db)
+    api_key = create_data.api_key.get_secret_value()
+    if not api_key.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A non-empty API key is required.",
+        )
+    if not create_data.name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A non-empty name is required.",
+        )
+
+    shared_api_key = SharedApiKey(
+        id=uuid4(),
+        id_ai_provider=create_data.id_ai_provider,
+        name=create_data.name.strip(),
+        encrypted_key=encrypt(api_key),
+        is_active=create_data.is_active,
+        created_at=datetime.now(),
+    )
+    db.add(shared_api_key)
+    db.commit()
+    db.refresh(shared_api_key)
+    return shared_api_key
+
+
+def update_shared_api_key(
+    identificator: str,
+    update_data: SharedApiKeyUpdate,
+    db: Session,
+) -> SharedApiKey:
+    shared_api_key = get_shared_api_key(identificator, db)
+    changes = update_data.model_dump(exclude_unset=True, exclude_none=True)
+
+    if "name" in changes:
+        name = changes.pop("name")
+        if not name.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="A non-empty name is required.",
+            )
+        shared_api_key.name = name.strip()
+    if "api_key" in changes:
+        api_key = changes.pop("api_key").get_secret_value()
+        if not api_key.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="A non-empty API key is required.",
+            )
+        shared_api_key.encrypted_key = encrypt(api_key)
+    if "is_active" in changes:
+        shared_api_key.is_active = changes["is_active"]
+
+    shared_api_key.updated_at = datetime.now()
+    db.commit()
+    db.refresh(shared_api_key)
+    return shared_api_key
+
+
+def delete_shared_api_key(identificator: str, db: Session) -> bool:
+    shared_api_key = get_shared_api_key(identificator, db)
+    shared_api_key.is_active = False
+    shared_api_key.updated_at = datetime.now()
+    db.commit()
+    return True
+
+
 ################
 ### Ai Agent
 ################
@@ -484,19 +591,21 @@ def get_user_api_key_can_use_ia_model(identificator: str, db: Session, token: st
      
     return user_api_key_can_use_ia_model
 
-def list_user_api_key_can_use_ia_model(filters: UserApiKeyCanUseIaModelFilters | None, db: Session, token: str) -> list[UserApiKeyCanUseIaModel]:
+def list_user_api_key_can_use_ia_model(
+    filters: dict[str, Any] | None,
+    db: Session,
+    token: str,
+) -> list[UserApiKeyCanUseIaModel]:
     user = get_current_user(token, db)
     stmt = select(UserApiKeyCanUseIaModel).join(
          UserApiKey, UserApiKey.id == UserApiKeyCanUseIaModel.id_user_api_key
         ).where(UserApiKey.id_user == user.id)  
     
-    for k, v in filters.items():
+    for k, v in (filters or {}).items():
         attr = getattr(UserApiKeyCanUseIaModel, k)
         stmt = stmt.where(attr == v)
         
-    user_api_key_can_use_ia_models = db.scalars(stmt).all()
-    
-    return user_api_key_can_use_ia_models
+    return list(db.scalars(stmt).all())
 
 def create_user_api_key_can_use_ia_model(create_data: UserApiKeyCanUseIaModelCreate, db: Session, token: str) -> UserApiKeyCanUseIaModel:
     user = get_current_user(token, db)

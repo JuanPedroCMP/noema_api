@@ -175,6 +175,40 @@ class UserApiKey(Base):
     user_api_key_can_use_ia_model: Mapped[list['UserApiKeyCanUseIaModel']] = relationship('UserApiKeyCanUseIaModel', back_populates='user_api_key')
 
 
+class SharedApiKey(Base):
+    __tablename__ = 'shared_api_key'
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['id_ai_provider'],
+            ['ai.ai_provider.id'],
+            ondelete='CASCADE',
+            onupdate='CASCADE',
+            name='shared_api_key_provider_fk',
+        ),
+        PrimaryKeyConstraint('id', name='shared_api_key_pk'),
+        UniqueConstraint(
+            'id_ai_provider',
+            'name',
+            name='shared_api_key_provider_name_uq',
+        ),
+        {'schema': 'ai'}
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    id_ai_provider: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    encrypted_key: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text('true')
+    )
+    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(True), server_default=text('CURRENT_TIMESTAMP')
+    )
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(True), server_default=text('CURRENT_TIMESTAMP')
+    )
+
+
 class AgentModel(Base):
     __tablename__ = 'agent_model'
     __table_args__ = (

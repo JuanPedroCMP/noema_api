@@ -1,7 +1,7 @@
 from typing import Optional
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, ConfigDict, Json
+from pydantic import BaseModel, EmailStr, ConfigDict, Field, Json, SecretStr
 from ...core.db_models.ai_models import TaskType, AgentModelQuality
 
 ################
@@ -126,6 +126,32 @@ class UserApiKeyFilters(BaseModel):
     is_active: Optional[bool | None] = None
     created_at: Optional[datetime | None] = None
     updated_at: Optional[datetime | None] = None
+
+################
+### Shared API Key
+################
+class SharedApiKeyOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    id_ai_provider: UUID
+    name: str
+    is_active: bool
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+class SharedApiKeyCreate(BaseModel):
+    id_ai_provider: UUID
+    name: str = Field(min_length=1, max_length=128)
+    api_key: SecretStr
+    is_active: bool = True
+
+
+class SharedApiKeyUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    api_key: SecretStr | None = None
+    is_active: bool | None = None
 
 ################
 ### Agent

@@ -2,7 +2,7 @@
 
 ## Preparação
 
-1. Faça backup do banco e aplique `migrations/20261103_user_ai_providers.sql` como uma única transação antes de iniciar a nova versão da API.
+1. Faça backup do banco e aplique, nesta ordem, `migrations/20261103_user_ai_providers.sql` e `migrations/20261104_shared_ai_api_keys.sql` antes de iniciar a nova versão da API.
 2. Configure `ADMIN_EMAIL` no ambiente do backend com o e-mail exato da única conta que pode alterar o catálogo global. Sem essa variável, as alterações globais retornam `503`; outras contas recebem `403`.
 3. Faça login normalmente e envie o token Bearer nas rotas de escrita.
 
@@ -20,6 +20,14 @@ Todas as rotas abaixo exigem autenticação e só permitem alterar dados pertenc
 | Modelos de agente | `GET/POST /api/v1/ai/me/agent-models`, `GET/PUT/DELETE /api/v1/ai/me/agent-models/{id}` |
 
 Para usar um modelo com autenticação, crie o provedor e o modelo, cadastre uma chave pela rota autenticada `/api/v1/ai/user_api_key/create` e vincule a chave ao modelo por `/api/v1/ai/user_api_key_can_use_ia_model/create`. Provedores OpenAI-compatible locais aceitam chave vazia. Chaves são criptografadas no banco e nunca retornadas pelas rotas de consulta.
+
+## Chaves compartilhadas de fallback
+
+O administrador configurado em `ADMIN_EMAIL` pode cadastrar chaves compartilhadas para provedores globais pelas rotas `/api/v1/ai/shared_api_key/create`, `/list`, `/update/{id}` e `/delete/{id}`. O corpo de criação contém `id_ai_provider`, `name`, `api_key` e, opcionalmente, `is_active`. A chave é criptografada usando `secret_key_api_key_ai`, nunca é retornada pela API e pode ser desativada ou substituída sem expor o valor anterior.
+
+Ao gerar uma resposta, a API tenta primeiro todas as chaves pessoais ativas dos modelos do agente, em ordem de preferência. Somente se nenhuma delas funcionar, tenta as chaves compartilhadas ativas, também em ordem de preferência. Cadastre apenas chaves em provedores globais, pois elas poderão ser usadas por qualquer usuário que selecione esses modelos.
+
+O idioma de resposta é o primeiro idioma com ordem definida em `response_language_preference_order` (ordem crescente); se não houver preferência ordenada, usa o idioma da configuração global do usuário. Se nenhum estiver definido, o prompt não recebe uma instrução adicional de idioma.
 
 Provedores pessoais usam o protocolo `openai_compatible`, incluindo serviços compatíveis com a API OpenAI, como vLLM, LM Studio, LocalAI, llama.cpp server e Ollama com a API OpenAI ativada. Informe o `base_url` completo, normalmente terminado em `/v1`.
 

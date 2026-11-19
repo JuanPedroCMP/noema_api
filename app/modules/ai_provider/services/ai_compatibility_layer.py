@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import importlib
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import UUID
 
@@ -13,8 +13,19 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ....core.ai_endpoint import validate_ai_endpoint
-from ....core.db_models.ai_models import Agent, AgentModel, AiModel, UserApiKey
+from ....core.db_models.ai_models import (
+    Agent,
+    AgentModel,
+    AiModel,
+    SharedApiKey,
+    UserApiKey,
+)
 from ....core.security import decrypt, get_current_user
+from ....core.db_models.user_config_models import (
+    Language,
+    ResponseLanguagePreferenceOrder,
+    UserGlobalConfig,
+)
 from ...ai.models import AgentModelFilters, AiUsageLogCreate
 from ...ai.services import (
     create_ai_usage_log,
@@ -174,9 +185,7 @@ class AiProvider:
             token=self.user_token,
         )
         if not links:
-            raise RuntimeError(
-                f"No API key is configured for model '{model.display_name}'."
-            )
+            return []
 
         keys: list[UserApiKey] = []
         for link in links:
@@ -194,16 +203,49 @@ class AiProvider:
                     model.display_name,
                     exc_info=True,
                 )
-        if not keys:
-            raise RuntimeError(
-                f"All configured API keys for model '{model.display_name}' "
-                "could not be loaded."
-            )
         return keys
+
+    def _get_shared_api_keys(self, model: AiModel) -> list[SharedApiKey]:
+        return list(
+            self.db.scalars(
+                select(SharedApiKey).where(
+                    SharedApiKey.id_ai_provider == model.id_ai_provider,
+                    SharedApiKey.is_active.is_(True),
+                )
+            ).all()
+        )
+
+    def _get_response_language(self, user_id: UUID) -> str | None:
+        preferred_language = self.db.scalar(
+            select(Language.name)
+            .join(
+                ResponseLanguagePreferenceOrder,
+                ResponseLanguagePreferenceOrder.id_language == Language.id,
+            )
+            .where(
+                ResponseLanguagePreferenceOrder.id_user == user_id,
+                ResponseLanguagePreferenceOrder.preference_order.is_not(None),
+            )
+            .order_by(
+                ResponseLanguagePreferenceOrder.preference_order.asc().nulls_last(),
+                Language.name,
+            )
+            .limit(1)
+        )
+        if preferred_language:
+            return preferred_language
+
+        return self.db.scalar(
+            select(Language.name)
+            .join(UserGlobalConfig, UserGlobalConfig.id_language == Language.id)
+            .where(UserGlobalConfig.id_user == user_id)
+            .limit(1)
+        )
 
     async def _invoke_model(
         self,
         model: AiModel,
+        api_keys: Sequence[UserApiKey | SharedApiKey],
         provider: Any,
         system_prompt: str,
         temperature: float,
@@ -213,7 +255,7 @@ class AiProvider:
         init_chat_model, chat_prompt_template = _import_langchain()
         last_error: Exception | None = None
 
-        for api_key in self._get_api_keys(model):
+        for api_key in api_keys:
             try:
                 decrypted_key = decrypt(api_key.encrypted_key)
                 if provider.protocol == "openai_compatible":
@@ -317,40 +359,63 @@ class AiProvider:
             raise RuntimeError("Agent not found.")
         response_model = self._get_response_model(agent.task)
         failures: list[str] = []
+        preference_order = self._calculate_preference_order(agent_id, user.id)
+        has_configured_keys = False
+        response_language = self._get_response_language(user.id)
 
-        for model, _, agent_model in self._calculate_preference_order(
-            agent_id, user.id
-        ):
-            try:
-                provider = get_provider(
-                    db=self.db,
-                    identificator=str(model.id_ai_provider),
-                    owner_id=user.id,
-                )
-                if model.is_active is False or provider.is_active is False:
-                    continue
-                system_prompt, temperature = self._get_prompt_settings(
-                    agent, agent_model
-                )
-                parsed, raw_response = await self._invoke_model(
-                    model,
-                    provider,
-                    system_prompt,
-                    temperature,
-                    user_prompt,
-                    response_model,
-                )
-                self._record_usage(agent_model, raw_response)
-                return parsed
-            except Exception as exc:
-                failures.append(f"{model.display_name}: {exc}")
-                logger.warning(
-                    "Configured AI model failed for agent %s.",
-                    agent_id,
-                    exc_info=True,
-                )
+        for key_source in ("personal", "shared"):
+            for model, _, agent_model in preference_order:
+                try:
+                    api_keys = (
+                        self._get_api_keys(model)
+                        if key_source == "personal"
+                        else self._get_shared_api_keys(model)
+                    )
+                    if not api_keys:
+                        continue
+                    has_configured_keys = True
+
+                    provider = get_provider(
+                        db=self.db,
+                        identificator=str(model.id_ai_provider),
+                        owner_id=user.id,
+                    )
+                    if model.is_active is False or provider.is_active is False:
+                        continue
+                    system_prompt, temperature = self._get_prompt_settings(
+                        agent, agent_model
+                    )
+                    if response_language:
+                        system_prompt = (
+                            f"{system_prompt}\n\n"
+                            f"Respond in {response_language}. Keep all natural-language "
+                            "content in that language, but do not translate JSON keys, "
+                            "code identifiers, or fixed enum values required by the schema."
+                        )
+                    parsed, raw_response = await self._invoke_model(
+                        model,
+                        api_keys,
+                        provider,
+                        system_prompt,
+                        temperature,
+                        user_prompt,
+                        response_model,
+                    )
+                    self._record_usage(agent_model, raw_response)
+                    return parsed
+                except Exception as exc:
+                    failures.append(f"{model.display_name} ({key_source} keys): {exc}")
+                    logger.warning(
+                        "Configured AI model failed for agent %s.",
+                        agent_id,
+                        exc_info=True,
+                    )
 
         if not failures:
+            if preference_order and not has_configured_keys:
+                raise RuntimeError(
+                    f"No active API keys are configured for any model of agent '{agent_id}'."
+                )
             raise RuntimeError(f"No models are configured for agent '{agent_id}'.")
         raise RuntimeError(
             "AI generation failed for every configured model: "

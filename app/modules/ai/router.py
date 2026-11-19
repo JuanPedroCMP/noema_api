@@ -5,6 +5,13 @@ from ...core.admin import require_admin
 from ...core.database import get_db
 from .services import get_provider as gp, list_providers as lp, create_provider as cp, update_provider as up, delete_provider as dp, get_ai_model as gam, list_ai_models as lam, create_ai_model as cam, update_ai_model as uam, delete_ai_model as dam,  get_user_api_key as guak, list_user_api_keys as luak, create_user_api_key as cuak, update_user_api_key as uuak, delete_user_api_key as duak, update_agent as ua, get_agent as ga, creaate_agent as ca, delete_agent as da, list_agents as la, get_agent_model as gaml, list_agent_models as laml, create_agent_model as caml, update_agent_model as uaml, delete_agent_model as daml, delete_user_api_key_can_use_ia_model as duapkcuam, list_user_api_key_can_use_ia_model as luapkcuam, get_user_api_key_can_use_ia_model as guapkcuam, create_user_api_key_can_use_ia_model as cuapkcuam, create_ai_usage_log as caul, get_ai_usage_log as gaul, list_ai_usage_logs as laul
 from .models import ProviderOut, ProviderFilters, ProviderCreate, ProviderUpdate, AiModelUpdate, AiModelOut, AiModelCreate, AiModelFilters, UserApiKeyCreate, UserApiKeyFilters, UserApiKeyOut,UserApiKeyUpdate, AgentOut, AgentCreate, AgentUpdate, AgentFilters, AgentModelCreate, AgentModelOut, AgentModelFilters, AgentModelUpdate, UserApiKeyCanUseIaModelCreate, UserApiKeyCanUseIaModelFilters, UserApiKeyCanUseIaModelOut, AiUsageLogFilters, AiUsageLogOut, AiUsageLogCreate
+from .services import (
+    create_shared_api_key,
+    delete_shared_api_key,
+    list_shared_api_keys,
+    update_shared_api_key,
+)
+from .models import SharedApiKeyCreate, SharedApiKeyOut, SharedApiKeyUpdate
 from typing import Annotated
 
 router = APIRouter(
@@ -113,6 +120,59 @@ def update_user_api_key(identificator: str, ai_model_data: UserApiKeyUpdate, db:
 def delete_user_api_key(identificator: str, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     sucess = duak(token, identificator, db)
     return sucess
+
+################
+### Shared API Key (admin-managed fallback keys)
+################
+shared_api_key_router = APIRouter(
+    prefix="/shared_api_key",
+    tags=["shared_api_key"],
+)
+
+
+@shared_api_key_router.get(
+    "/list",
+    response_model=list[SharedApiKeyOut],
+    dependencies=[Depends(require_admin)],
+)
+def list_shared_api_key(db: Session = Depends(get_db)):
+    return list_shared_api_keys(db)
+
+
+@shared_api_key_router.post(
+    "/create",
+    response_model=SharedApiKeyOut,
+    dependencies=[Depends(require_admin)],
+)
+def create_shared_api_key_endpoint(
+    new_shared_api_key: SharedApiKeyCreate,
+    db: Session = Depends(get_db),
+):
+    return create_shared_api_key(new_shared_api_key, db)
+
+
+@shared_api_key_router.put(
+    "/update/{identificator}",
+    response_model=SharedApiKeyOut,
+    dependencies=[Depends(require_admin)],
+)
+def update_shared_api_key_endpoint(
+    identificator: str,
+    shared_api_key_data: SharedApiKeyUpdate,
+    db: Session = Depends(get_db),
+):
+    return update_shared_api_key(identificator, shared_api_key_data, db)
+
+
+@shared_api_key_router.delete(
+    "/delete/{identificator}",
+    dependencies=[Depends(require_admin)],
+)
+def delete_shared_api_key_endpoint(
+    identificator: str,
+    db: Session = Depends(get_db),
+):
+    return delete_shared_api_key(identificator, db)
 
 ################
 ### Agent
@@ -237,6 +297,7 @@ def create_agent_model(new_agent_model: AiUsageLogCreate, db: Session = Depends(
 router.include_router(provider_router)
 router.include_router(ai_model_router)
 router.include_router(user_api_key_router)
+router.include_router(shared_api_key_router)
 router.include_router(agent_router)
 router.include_router(agent_model_router)
 router.include_router(user_api_key_can_use_ia_model_router)

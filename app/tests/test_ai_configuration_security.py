@@ -1,4 +1,6 @@
+import asyncio
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -70,6 +72,10 @@ def test_global_catalog_mutations_are_admin_only():
         "/api/v1/ai/ai_model/create": "post",
         "/api/v1/ai/ai_model/update/{identificator}": "put",
         "/api/v1/ai/ai_model/delete/{identificator}": "delete",
+        "/api/v1/ai/shared_api_key/list": "get",
+        "/api/v1/ai/shared_api_key/create": "post",
+        "/api/v1/ai/shared_api_key/update/{identificator}": "put",
+        "/api/v1/ai/shared_api_key/delete/{identificator}": "delete",
         "/api/v1/ai/agent/create": "post",
         "/api/v1/ai/agent/update/{identificator}": "put",
         "/api/v1/ai/agent/delete/{identificator}": "delete",
@@ -194,3 +200,230 @@ def test_personal_key_model_lookup_is_always_user_scoped(monkeypatch):
     sql = str(db.statement)
     assert "ai.user_api_key.id_user =" in sql
     assert "AND (ai.user_api_key_can_use_ia_model.id =" in sql
+
+
+def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
+    from app.modules.ai_provider.services import ai_compatibility_layer
+
+    user = SimpleNamespace(id=uuid4())
+    agent_id = uuid4()
+    agent = SimpleNamespace(
+        id=agent_id,
+        task="create_flashcard",
+        base_system_prompt="system",
+        temperature=0.3,
+    )
+    model_without_key = SimpleNamespace(
+        id=uuid4(), id_ai_provider=uuid4(), display_name="No key", is_active=True
+    )
+    model_with_key = SimpleNamespace(
+        id=uuid4(), id_ai_provider=uuid4(), display_name="Has key", is_active=True
+    )
+    model_with_shared_key = SimpleNamespace(
+        id=uuid4(),
+        id_ai_provider=uuid4(),
+        display_name="Shared key only",
+        is_active=True,
+    )
+    agent_model_without_key = SimpleNamespace(
+        custom_system_prompt=None, custom_temperature=None
+    )
+    agent_model_with_key = SimpleNamespace(
+        custom_system_prompt=None, custom_temperature=None
+    )
+    agent_model_with_shared_key = SimpleNamespace(
+        custom_system_prompt=None, custom_temperature=None
+    )
+    personal_key = object()
+    shared_key = object()
+
+    class Db:
+        def scalar(self, _statement):
+            return agent
+
+    monkeypatch.setattr(
+        ai_compatibility_layer, "get_current_user", lambda **_kwargs: user
+    )
+    monkeypatch.setattr(
+        ai_compatibility_layer.AiProvider,
+        "_get_response_model",
+        staticmethod(lambda _task: object()),
+    )
+    monkeypatch.setattr(
+        ai_compatibility_layer.AiProvider,
+        "_calculate_preference_order",
+        lambda _self, _agent_id, _owner_id: [
+            (model_without_key, 2.0, agent_model_without_key),
+            (model_with_shared_key, 1.5, agent_model_with_shared_key),
+            (model_with_key, 1.0, agent_model_with_key),
+        ],
+    )
+    monkeypatch.setattr(
+        ai_compatibility_layer.AiProvider,
+        "_get_api_keys",
+        lambda _self, model: [personal_key] if model is model_with_key else [],
+    )
+    monkeypatch.setattr(
+        ai_compatibility_layer.AiProvider,
+        "_get_shared_api_keys",
+        lambda _self, model: (
+            [shared_key] if model is model_with_shared_key else []
+        ),
+    )
+    monkeypatch.setattr(
+        ai_compatibility_layer.AiProvider,
+        "_get_response_language",
+        lambda _self, _user_id: "Portuguese",
+    )
+
+    provider_lookups = []
+
+    def get_provider(**kwargs):
+        provider_lookups.append(kwargs["identificator"])
+        return SimpleNamespace(is_active=True)
+
+    monkeypatch.setattr(ai_compatibility_layer, "get_provider", get_provider)
+
+    invoked_models = []
+    invoked_keys = []
+    invoked_prompts = []
+
+    async def invoke_model(
+        _self, model, _api_keys, _provider, _system_prompt, _temperature,
+        _user_prompt, _response_model,
+    ):
+        invoked_models.append(model)
+        invoked_keys.append(_api_keys)
+        invoked_prompts.append(_system_prompt)
+        if personal_key in _api_keys:
+            raise RuntimeError("Personal API key failed.")
+        return "response", object()
+
+    monkeypatch.setattr(
+        ai_compatibility_layer.AiProvider, "_invoke_model", invoke_model
+    )
+    monkeypatch.setattr(
+        ai_compatibility_layer.AiProvider, "_record_usage", lambda *_args: None
+    )
+
+    result = asyncio.run(
+        ai_compatibility_layer.AiProvider(Db(), "token").call_ai("prompt", agent_id)
+    )
+
+    assert result == "response"
+    assert provider_lookups == [
+        str(model_with_key.id_ai_provider),
+        str(model_with_shared_key.id_ai_provider),
+    ]
+    assert invoked_models == [model_with_key, model_with_shared_key]
+    assert invoked_keys == [[personal_key], [shared_key]]
+    assert all("Respond in Portuguese." in prompt for prompt in invoked_prompts)
+
+
+def test_shared_api_key_is_encrypted_and_never_returned(monkeypatch):
+    from app.modules.ai import services
+    from app.modules.ai.models import SharedApiKeyCreate, SharedApiKeyOut
+
+    provider_id = uuid4()
+    monkeypatch.setattr(
+        services, "get_provider", lambda _provider_id, _db: SimpleNamespace()
+    )
+    encrypted_values = []
+
+    def encrypt(api_key):
+        encrypted_values.append(api_key)
+        return "encrypted-replacement"
+
+    monkeypatch.setattr(services, "encrypt", encrypt)
+
+    class Db:
+        added = None
+
+        def add(self, value):
+            self.added = value
+
+        def commit(self):
+            pass
+
+        def refresh(self, _value):
+            pass
+
+    db = Db()
+    created = services.create_shared_api_key(
+        SharedApiKeyCreate(
+            id_ai_provider=provider_id,
+            name="Primary shared key",
+            api_key="provider-secret",
+        ),
+        db,
+    )
+    response = SharedApiKeyOut.model_validate(created)
+
+    assert db.added is created
+    assert created.encrypted_key == "encrypted-replacement"
+    assert encrypted_values == ["provider-secret"]
+    assert "provider-secret" not in response.model_dump_json()
+
+
+def test_shared_api_key_update_encrypts_replacement(monkeypatch):
+    from app.modules.ai import services
+    from app.modules.ai.models import SharedApiKeyUpdate
+
+    shared_key = SimpleNamespace(
+        id=uuid4(),
+        id_ai_provider=uuid4(),
+        name="Shared key",
+        encrypted_key="old-encrypted-key",
+        is_active=True,
+        updated_at=None,
+    )
+    monkeypatch.setattr(
+        services, "get_shared_api_key", lambda _id, _db: shared_key
+    )
+    encrypted_values = []
+
+    def encrypt(api_key):
+        encrypted_values.append(api_key)
+        return "encrypted-replacement"
+
+    monkeypatch.setattr(services, "encrypt", encrypt)
+
+    class Db:
+        def commit(self):
+            pass
+
+        def refresh(self, _value):
+            pass
+
+    updated = services.update_shared_api_key(
+        str(shared_key.id),
+        SharedApiKeyUpdate(api_key="replacement-secret", is_active=False),
+        Db(),
+    )
+
+    assert updated.encrypted_key == "encrypted-replacement"
+    assert updated.is_active is False
+    assert encrypted_values == ["replacement-secret"]
+    assert "replacement-secret" not in repr(updated)
+
+
+def test_response_language_uses_preference_then_global_setting():
+    from app.modules.ai_provider.services.ai_compatibility_layer import AiProvider
+
+    class Db:
+        def __init__(self):
+            self.results = iter((None, "Português"))
+            self.statements = []
+
+        def scalar(self, statement):
+            self.statements.append(str(statement))
+            return next(self.results)
+
+    db = Db()
+    language = AiProvider(db, "token")._get_response_language(uuid4())
+
+    assert language == "Português"
+    assert len(db.statements) == 2
+    assert "response_language_preference_order" in db.statements[0]
+    assert "preference_order IS NOT NULL" in db.statements[0]
+    assert "user_global_config" in db.statements[1]
