@@ -105,6 +105,20 @@ def _import_langchain() -> tuple[Any, Any]:
     return chat_models.init_chat_model, prompts.ChatPromptTemplate
 
 
+def _format_provider_error(error: Exception) -> str:
+    message = str(error)
+    if any(
+        marker in message.casefold()
+        for marker in (
+            "tool_use_failed",
+            "failed_generation",
+            "failed to parse tool call arguments",
+        )
+    ):
+        return "Provider rejected malformed structured-output arguments."
+    return message
+
+
 class AiProvider:
     """Generate structured responses using an agent's configured model order."""
 
@@ -276,15 +290,31 @@ class AiProvider:
                         base_url=provider.base_url,
                     )
                 else:
+                    model_provider = (
+                        "google_genai"
+                        if provider.slug.casefold() == "google"
+                        else provider.slug
+                    )
                     chat_model = init_chat_model(
                         model.slug,
-                        model_provider=provider.slug,
+                        model_provider=model_provider,
                         temperature=temperature,
                         api_key=decrypted_key,
+                    )
+                structured_output_options: dict[str, str] = {}
+                if model.slug.rsplit("/", 1)[-1].casefold().startswith(
+                    "gpt-oss-"
+                ):
+                    structured_output_options["method"] = "json_mode"
+                    system_prompt = (
+                        f"{system_prompt}\n\n"
+                        "Return only JSON matching the following JSON Schema:\n"
+                        f"{json.dumps(response_model.model_json_schema(), ensure_ascii=False)}"
                     )
                 structured_model = chat_model.with_structured_output(
                     response_model,
                     include_raw=True,
+                    **structured_output_options,
                 )
                 prompt = chat_prompt_template.from_messages(
                     [
@@ -341,7 +371,8 @@ class AiProvider:
                 )
 
         raise RuntimeError(
-            f"All API keys for model '{model.display_name}' failed: {last_error}"
+            f"All API keys for model '{model.display_name}' failed: "
+            f"{_format_provider_error(last_error) if last_error else 'Unknown error.'}"
         ) from last_error
 
     def _parse_model_result(

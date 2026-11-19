@@ -320,11 +320,22 @@ def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
     assert all("Respond in Portuguese." in prompt for prompt in invoked_prompts)
 
 
-def test_invalid_structured_response_is_retried_and_validated(monkeypatch):
+@pytest.mark.parametrize(
+    ("model_slug", "provider_slug", "expected_provider", "expected_method"),
+    [
+        ("test-model", "google", "google_genai", None),
+        ("openai/gpt-oss-120b", "groq", "groq", "json_mode"),
+    ],
+)
+def test_invalid_structured_response_is_retried_and_validated(
+    monkeypatch, model_slug, provider_slug, expected_provider, expected_method
+):
     from app.modules.ai_provider.services import ai_compatibility_layer
     from app.modules.ai_provider.models import CreateFlashcard
 
     prompts = []
+    system_prompts = []
+    structured_methods = []
 
     class Prompt:
         def __or__(self, _structured_model):
@@ -352,26 +363,36 @@ def test_invalid_structured_response_is_retried_and_validated(monkeypatch):
 
     class PromptTemplate:
         @staticmethod
-        def from_messages(_messages):
+        def from_messages(messages):
+            system_prompts.append(messages[0][1])
             return Prompt()
 
     class ChatModel:
-        def with_structured_output(self, _response_model, include_raw):
+        def with_structured_output(
+            self, _response_model, include_raw, **options
+        ):
             assert include_raw is True
+            structured_methods.append(options.get("method"))
             return object()
+
+    model_providers = []
+
+    def init_chat_model(*_args, **kwargs):
+        model_providers.append(kwargs["model_provider"])
+        return ChatModel()
 
     monkeypatch.setattr(
         ai_compatibility_layer,
         "_import_langchain",
-        lambda: (lambda *_args, **_kwargs: ChatModel(), PromptTemplate),
+        lambda: (init_chat_model, PromptTemplate),
     )
     monkeypatch.setattr(ai_compatibility_layer, "decrypt", lambda _key: "api-key")
 
     result, _raw = asyncio.run(
         ai_compatibility_layer.AiProvider(object(), "token")._invoke_model(
-            model=SimpleNamespace(slug="test-model", display_name="Test model"),
+            model=SimpleNamespace(slug=model_slug, display_name="Test model"),
             api_keys=[SimpleNamespace(encrypted_key="encrypted")],
-            provider=SimpleNamespace(protocol="native", slug="test-provider"),
+            provider=SimpleNamespace(protocol="native", slug=provider_slug),
             system_prompt="Return a flashcard.",
             temperature=0.3,
             user_prompt="Create one flashcard.",
@@ -381,9 +402,29 @@ def test_invalid_structured_response_is_retried_and_validated(monkeypatch):
 
     assert isinstance(result, CreateFlashcard)
     assert result.title == "Title"
+    assert model_providers == [expected_provider]
+    assert structured_methods == [expected_method]
+    if expected_method == "json_mode":
+        assert "Return only JSON matching the following JSON Schema:" in system_prompts[0]
+        assert '"target_skill"' in system_prompts[0]
     assert len(prompts) == 2
     assert "did not satisfy the required CreateFlashcard data model" in prompts[1]
     assert "not valid JSON" in prompts[1]
+
+
+def test_malformed_tool_error_does_not_expose_generated_arguments():
+    from app.modules.ai_provider.services.ai_compatibility_layer import (
+        _format_provider_error,
+    )
+
+    message = _format_provider_error(
+        RuntimeError(
+            "tool_use_failed: failed_generation={'private_argument': 'model output'}"
+        )
+    )
+
+    assert "private_argument" not in message
+    assert "model output" not in message
 
 
 def test_structured_response_still_rejects_missing_required_fields():
