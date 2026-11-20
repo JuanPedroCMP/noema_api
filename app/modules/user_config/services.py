@@ -169,6 +169,7 @@ def create_language(language_data: LanguageCreate, db: Session) -> Language:
         percentage_translated=language_data.percentage_translated,
         verified_translation=language_data.verified_translation,
         automatic_translation=language_data.automatic_translation,
+        is_native=language_data.is_native,
         created_at=datetime.now()
     )
     

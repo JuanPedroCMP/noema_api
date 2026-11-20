@@ -3,8 +3,30 @@ from sqlalchemy.orm import Session
 from ...core.security import oauth2_scheme
 from ...core.database import get_db
 from .services import get_user_global_config as gugc, create_user_global_config as cugc, update_user_global_config as uugc, get_language as gl, list_language as ll, create_language as cl, update_language as ul, delete_response_language_preference_order as drlpo, get_response_language_preference_order as grlpo, list_response_language_preference_orders as lrlpo, list_user_global_configs as list_user_local_configs, create_response_language_preference_order as crlpo, update_response_language_preference_order as urlpo, update_user_local_config as uulc, get_user_local_config as gulc, create_user_local_config as culc
-from .models import UserGlobalConfigCreate, UserGlobalConfigOut, UserGlobalConfigUpdate, UserLocalConfigCreate, UserLocalConfigOut, UserLocalConfigUpdate, LanguageUpdate, LanguageFilters, LanguageCreate, LanguageOut, ResponseLanguagePreferenceOrderOut, ResponseLanguagePreferenceOrderUpdate, ResponseLanguagePreferenceOrderCreate, UserLocalConfigFilters, UserPreferencesOut, UserPreferencesUpdate
-from .preferences import get_user_preferences, update_user_preferences
+from .models import (
+    LanguageCreate,
+    LanguageFilters,
+    LanguageOut,
+    LanguageUpdate,
+    ResponseLanguagePreferenceOrderCreate,
+    ResponseLanguagePreferenceOrderOut,
+    ResponseLanguagePreferenceOrderUpdate,
+    UserGlobalConfigCreate,
+    UserGlobalConfigOut,
+    UserGlobalConfigUpdate,
+    UserLocalConfigCreate,
+    UserLocalConfigFilters,
+    UserLocalConfigOut,
+    UserLocalConfigUpdate,
+    UserPreferencesOut,
+    UserPreferencesPatch,
+    UserPreferencesUpdate,
+)
+from .preferences import (
+    get_user_preferences,
+    patch_user_preferences,
+    update_user_preferences,
+)
 from typing import Annotated
 
 router = APIRouter(
@@ -35,6 +57,15 @@ def write_user_preferences(
     token: str = Depends(oauth2_scheme),
 ):
     return update_user_preferences(token, preferences_data, db)
+
+
+@router_user_preferences.patch("", response_model=UserPreferencesOut)
+def patch_user_preferences_endpoint(
+    preferences_data: UserPreferencesPatch,
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+):
+    return patch_user_preferences(token, preferences_data, db)
 
 
 ################

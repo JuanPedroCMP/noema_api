@@ -93,6 +93,34 @@ def test_preferences_endpoints_are_authenticated_and_replace_user_preferences(
                 "timezone": "America/Sao_Paulo",
             }
 
+            patched = client.patch(
+                "/api/v1/user_config/preferences",
+                json={"preferences": {"timezone": "Europe/Paris"}},
+            )
+            assert patched.status_code == 200
+            assert patched.json()["preferences"] == {
+                "backupFrequency": "weekly",
+                "timezone": "Europe/Paris",
+            }
+
+            scheduled = client.put(
+                "/api/v1/user_config/preferences",
+                json={
+                    "preferences": {
+                        "backupFrequency": "manual",
+                        "backupSchedule": {"unit": "hours", "interval": 4},
+                        "backupOnExit": True,
+                    }
+                },
+            )
+            assert scheduled.status_code == 200
+            assert scheduled.json()["preferences"]["backupFrequency"] == "manual"
+            assert scheduled.json()["preferences"]["backupSchedule"] == {
+                "unit": "hours",
+                "interval": 4,
+            }
+            assert scheduled.json()["preferences"]["backupOnExit"] is True
+
             invalid_timezone = client.put(
                 "/api/v1/user_config/preferences",
                 json={"preferences": {"timezone": "Mars/Olympus_Mons"}},
@@ -108,11 +136,31 @@ def test_preferences_endpoints_are_authenticated_and_replace_user_preferences(
                 json={"preferences": {"backupFrequency": []}},
             )
             assert invalid_frequency_type.status_code == 422
+            invalid_backup_schedule = client.put(
+                "/api/v1/user_config/preferences",
+                json={
+                    "preferences": {
+                        "backupSchedule": {"unit": "hours", "interval": 25}
+                    }
+                },
+            )
+            assert invalid_backup_schedule.status_code == 422
+            invalid_backup_schedule_unit = client.put(
+                "/api/v1/user_config/preferences",
+                json={"preferences": {"backupSchedule": {"unit": [], "interval": 1}}},
+            )
+            assert invalid_backup_schedule_unit.status_code == 422
+            invalid_backup_on_exit = client.put(
+                "/api/v1/user_config/preferences",
+                json={"preferences": {"backupOnExit": "yes"}},
+            )
+            assert invalid_backup_on_exit.status_code == 422
 
         schema = app.openapi()
         route = schema["paths"]["/api/v1/user_config/preferences"]
         assert "security" in route["get"]
         assert "security" in route["put"]
+        assert "security" in route["patch"]
         assert (
             route["put"]["requestBody"]["content"]["application/json"]["schema"][
                 "$ref"
@@ -167,3 +215,33 @@ def test_password_reset_email_includes_local_and_utc_times(monkeypatch):
     assert "hora local — America/Sao_Paulo" in plain_text
     assert "Solicitado em (UTC):" in plain_text
     assert "Expira em (UTC):" in plain_text
+
+
+def test_language_list_exposes_explicit_native_translation_flag():
+    from app.main import app
+
+    language_id = UUID("a275d698-0624-4917-941d-b9909f31d7b6")
+    language = SimpleNamespace(
+        id=language_id,
+        name="English",
+        percentage_translated=100,
+        verified_translation=True,
+        automatic_translation=False,
+        is_native=True,
+        created_at=None,
+        updated_at=None,
+    )
+
+    class LanguageDB(FakeDB):
+        def scalars(self, _statement):
+            return SimpleNamespace(all=lambda: [language])
+
+    app.dependency_overrides[get_db] = lambda: LanguageDB()
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/v1/user_config/language/list")
+
+        assert response.status_code == 200
+        assert response.json()[0]["is_native"] is True
+    finally:
+        app.dependency_overrides.clear()

@@ -49,6 +49,7 @@ class Language(Base):
     percentage_translated: Mapped[Optional[int]] = mapped_column(SmallInteger)
     verified_translation: Mapped[Optional[bool]] = mapped_column(Boolean, server_default=text('false'))
     automatic_translation: Mapped[Optional[bool]] = mapped_column(Boolean, server_default=text('true'))
+    is_native: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text('false'))
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
 

@@ -6,7 +6,11 @@ from sqlalchemy.orm import Session
 
 from ...core.db_models.user_config_models import UserPreferences
 from ...core.security import get_current_user
-from .models import UserPreferencesOut, UserPreferencesUpdate
+from .models import (
+    UserPreferencesOut,
+    UserPreferencesPatch,
+    UserPreferencesUpdate,
+)
 
 
 def get_user_preferences(token: str, db: Session) -> UserPreferencesOut:
@@ -55,6 +59,55 @@ def update_user_preferences(
         if preferences is None:
             raise
         preferences.preferences = preferences_data.preferences
+        preferences.updated_at = now
+        db.commit()
+
+    db.refresh(preferences)
+    return UserPreferencesOut.model_validate(preferences)
+
+
+def patch_user_preferences(
+    token: str,
+    preferences_data: UserPreferencesPatch,
+    db: Session,
+) -> UserPreferencesOut:
+    user = get_current_user(token, db)
+    preferences = db.scalar(
+        select(UserPreferences)
+        .where(UserPreferences.id_user == user.id)
+        .with_for_update()
+    )
+    now = datetime.now(timezone.utc)
+    if preferences is None:
+        preferences = UserPreferences(
+            id_user=user.id,
+            preferences=preferences_data.preferences,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(preferences)
+    else:
+        preferences.preferences = {
+            **preferences.preferences,
+            **preferences_data.preferences,
+        }
+        preferences.updated_at = now
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        preferences = db.scalar(
+            select(UserPreferences)
+            .where(UserPreferences.id_user == user.id)
+            .with_for_update()
+        )
+        if preferences is None:
+            raise
+        preferences.preferences = {
+            **preferences.preferences,
+            **preferences_data.preferences,
+        }
         preferences.updated_at = now
         db.commit()
 

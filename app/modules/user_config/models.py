@@ -15,6 +15,7 @@ class LanguageOut(BaseModel):
     percentage_translated: int
     verified_translation: bool
     automatic_translation:bool
+    is_native: bool
     created_at: datetime | None
     updated_at: datetime| None
     
@@ -24,6 +25,7 @@ class LanguageFilters(BaseModel):
     percentage_translated: Optional[int | None] = None
     verified_translation: Optional[bool | None] = None
     automatic_translation:Optional[bool | None] = None
+    is_native: Optional[bool | None] = None
     created_at: Optional[datetime | None] = None
     updated_at: Optional[datetime| None] = None
     
@@ -32,12 +34,14 @@ class LanguageCreate(BaseModel):
     percentage_translated: int
     verified_translation: bool
     automatic_translation:bool
+    is_native: bool = False
 
 class LanguageUpdate(BaseModel):
     name: Optional[str | None] = None
     percentage_translated: Optional[int | None] = None
     verified_translation: Optional[bool | None] = None
     automatic_translation:Optional[bool | None] = None
+    is_native: Optional[bool | None] = None
 
 ################
 ### UserGlobalConfig
@@ -97,6 +101,38 @@ class UserPreferencesUpdate(BaseModel):
                     "backupFrequency must be manual, daily, weekly, or monthly"
                 )
 
+        if "backupSchedule" in preferences:
+            schedule = preferences["backupSchedule"]
+            if not isinstance(schedule, dict):
+                raise ValueError("backupSchedule must be an object")
+            unit = schedule.get("unit")
+            interval = schedule.get("interval")
+            if not isinstance(unit, str) or unit not in {"never", "days", "hours"}:
+                raise ValueError(
+                    "backupSchedule.unit must be never, days, or hours"
+                )
+            if unit == "never":
+                if interval is not None:
+                    raise ValueError("a never backup schedule cannot have an interval")
+            elif type(interval) is not int or interval < 1:
+                raise ValueError(
+                    "backupSchedule.interval must be a positive integer"
+                )
+            elif unit == "days" and interval > 365:
+                raise ValueError(
+                    "backupSchedule.interval must be between 1 and 365 days"
+                )
+            elif unit == "hours" and interval > 24:
+                raise ValueError(
+                    "backupSchedule.interval must be between 1 and 24 hours"
+                )
+
+        if (
+            "backupOnExit" in preferences
+            and type(preferences["backupOnExit"]) is not bool
+        ):
+            raise ValueError("backupOnExit must be a boolean")
+
         user_timezone = preferences.get("timezone")
         if user_timezone is not None:
             if not isinstance(user_timezone, str):
@@ -106,6 +142,10 @@ class UserPreferencesUpdate(BaseModel):
             except (ValueError, ZoneInfoNotFoundError) as exc:
                 raise ValueError("timezone must be a valid IANA timezone name") from exc
         return preferences
+
+
+class UserPreferencesPatch(UserPreferencesUpdate):
+    pass
 
 
 class UserPreferencesOut(BaseModel):
