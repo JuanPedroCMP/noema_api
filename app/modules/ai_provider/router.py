@@ -23,7 +23,7 @@ router = APIRouter(
     tags=["ai_router"]
 )
 logger = logging.getLogger(__name__)
-AI_GENERATION_TIMEOUT_SECONDS = 75
+AI_GENERATION_TIMEOUT_SECONDS = 240
 
 
 def _resolve_response_language(

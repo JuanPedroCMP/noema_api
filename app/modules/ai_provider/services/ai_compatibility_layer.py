@@ -68,8 +68,8 @@ QUALITY_SCORES = {
     "very_good": 7.5,
     "excellent": 10.0,
 }
-AI_MODEL_REQUEST_TIMEOUT_SECONDS = 30
-AI_MODEL_HTTP_TIMEOUT_SECONDS = 28
+AI_MODEL_REQUEST_TIMEOUT_SECONDS = 240
+AI_MODEL_HTTP_TIMEOUT_SECONDS = 240
 
 # Keep every planned task here. Some response classes are intentionally not
 # defined yet and can be added to app.modules.ai_provider.models later.
@@ -335,7 +335,10 @@ class AiProvider:
                 )
                 prompt = chat_prompt_template.from_messages(
                     [
-                        ("system", system_prompt),
+                        (
+                            "system",
+                            system_prompt.replace("{", "{{").replace("}", "}}"),
+                        ),
                         ("human", "{user_prompt}"),
                     ]
                 )

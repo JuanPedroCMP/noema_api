@@ -335,7 +335,7 @@ def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
             "groq",
             "groq",
             "json_mode",
-            {"max_retries": 0, "timeout": 28},
+            {"max_retries": 0, "timeout": 240},
         ),
     ],
 )
@@ -433,6 +433,8 @@ def test_invalid_structured_response_is_retried_and_validated(
     if expected_method == "json_mode":
         assert "Return only JSON matching the following JSON Schema:" in system_prompts[0]
         assert '"target_skill"' in system_prompts[0]
+        assert "{{" in system_prompts[0]
+        assert "}}" in system_prompts[0]
     assert len(prompts) == 2
     assert "did not satisfy the required CreateFlashcard data model" in prompts[1]
     assert "not valid JSON" in prompts[1]
@@ -478,6 +480,15 @@ def test_ai_generation_timeout_returns_gateway_timeout(monkeypatch):
 
     assert error.value.status_code == 504
     assert "timed out" in error.value.detail.lower()
+
+
+def test_ai_generation_timeout_is_four_minutes():
+    from app.modules.ai_provider import router
+    from app.modules.ai_provider.services import ai_compatibility_layer
+
+    assert router.AI_GENERATION_TIMEOUT_SECONDS == 240
+    assert ai_compatibility_layer.AI_MODEL_REQUEST_TIMEOUT_SECONDS == 240
+    assert ai_compatibility_layer.AI_MODEL_HTTP_TIMEOUT_SECONDS == 240
 
 
 def test_structured_response_still_rejects_missing_required_fields():
