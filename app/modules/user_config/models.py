@@ -1,7 +1,8 @@
 from typing import Optional
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Json
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from pydantic import BaseModel, ConfigDict, Json, field_validator
 
 ################
 ### Language
@@ -76,6 +77,43 @@ class UserGlobalConfigUpdate(BaseModel):
     id_user_color_theme: Optional[UUID | None] = None
     id_user_typography_theme: Optional[UUID | None] = None
     preferences: Optional[Json | None] = None
+
+
+class UserPreferencesUpdate(BaseModel):
+    preferences: dict[str, object]
+
+    @field_validator("preferences")
+    @classmethod
+    def validate_preferences(cls, preferences: dict[str, object]) -> dict[str, object]:
+        if "backupFrequency" in preferences:
+            backup_frequency = preferences["backupFrequency"]
+            if not isinstance(backup_frequency, str) or backup_frequency not in {
+                "manual",
+                "daily",
+                "weekly",
+                "monthly",
+            }:
+                raise ValueError(
+                    "backupFrequency must be manual, daily, weekly, or monthly"
+                )
+
+        user_timezone = preferences.get("timezone")
+        if user_timezone is not None:
+            if not isinstance(user_timezone, str):
+                raise ValueError("timezone must be an IANA timezone name")
+            try:
+                ZoneInfo(user_timezone)
+            except (ValueError, ZoneInfoNotFoundError) as exc:
+                raise ValueError("timezone must be a valid IANA timezone name") from exc
+        return preferences
+
+
+class UserPreferencesOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id_user: UUID
+    preferences: dict
+    updated_at: datetime | None
     
 ################
 ### UserLocalConfig

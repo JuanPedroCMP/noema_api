@@ -3,12 +3,39 @@ from sqlalchemy.orm import Session
 from ...core.security import oauth2_scheme
 from ...core.database import get_db
 from .services import get_user_global_config as gugc, create_user_global_config as cugc, update_user_global_config as uugc, get_language as gl, list_language as ll, create_language as cl, update_language as ul, delete_response_language_preference_order as drlpo, get_response_language_preference_order as grlpo, list_response_language_preference_orders as lrlpo, list_user_global_configs as list_user_local_configs, create_response_language_preference_order as crlpo, update_response_language_preference_order as urlpo, update_user_local_config as uulc, get_user_local_config as gulc, create_user_local_config as culc
-from .models import UserGlobalConfigCreate, UserGlobalConfigOut, UserGlobalConfigUpdate, UserLocalConfigCreate, UserLocalConfigOut, UserLocalConfigUpdate, LanguageUpdate, LanguageFilters, LanguageCreate, LanguageOut, ResponseLanguagePreferenceOrderOut, ResponseLanguagePreferenceOrderUpdate, ResponseLanguagePreferenceOrderCreate, UserLocalConfigFilters
+from .models import UserGlobalConfigCreate, UserGlobalConfigOut, UserGlobalConfigUpdate, UserLocalConfigCreate, UserLocalConfigOut, UserLocalConfigUpdate, LanguageUpdate, LanguageFilters, LanguageCreate, LanguageOut, ResponseLanguagePreferenceOrderOut, ResponseLanguagePreferenceOrderUpdate, ResponseLanguagePreferenceOrderCreate, UserLocalConfigFilters, UserPreferencesOut, UserPreferencesUpdate
+from .preferences import get_user_preferences, update_user_preferences
 from typing import Annotated
 
 router = APIRouter(
     prefix="/user_config",
 )
+
+################
+### User Preferences
+################
+router_user_preferences = APIRouter(
+    prefix="/preferences",
+    tags=["user_preferences"],
+)
+
+
+@router_user_preferences.get("", response_model=UserPreferencesOut)
+def read_user_preferences(
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+):
+    return get_user_preferences(token, db)
+
+
+@router_user_preferences.put("", response_model=UserPreferencesOut)
+def write_user_preferences(
+    preferences_data: UserPreferencesUpdate,
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+):
+    return update_user_preferences(token, preferences_data, db)
+
 
 ################
 ### User Global Config
@@ -121,5 +148,6 @@ def update_response_language_preference_order(identificator: str, db: Session = 
 
 router.include_router(router_user_global_config)
 router.include_router(router_user_local_config)
+router.include_router(router_user_preferences)
 router.include_router(language_router)
 router.include_router(response_response_language_preference_order_router)

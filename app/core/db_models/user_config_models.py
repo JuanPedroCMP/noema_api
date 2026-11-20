@@ -170,6 +170,20 @@ class UserGlobalConfig(Base):
     user_typography_theme: Mapped[Optional['UserTypographyTheme']] = relationship('UserTypographyTheme', back_populates='user_global_config')
 
 
+class UserPreferences(Base):
+    __tablename__ = 'user_preferences'
+    __table_args__ = (
+        ForeignKeyConstraint(['id_user'], ['app_auth.user.id'], ondelete='CASCADE', onupdate='CASCADE', name='user_preferences_user_fk'),
+        PrimaryKeyConstraint('id_user', name='user_preferences_pk'),
+        {'schema': 'user_config'}
+    )
+
+    id_user: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    preferences: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
+
+
 class UserLocalConfig(Base):
     __tablename__ = 'user_local_config'
     __table_args__ = (

@@ -1,10 +1,11 @@
 import os
 import secrets
 import smtplib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html import escape
+from zoneinfo import ZoneInfo
 from uuid import UUID, uuid4
 
 from dotenv import load_dotenv
@@ -19,6 +20,7 @@ from app.modules.user.service import get_user_by_identificator
 
 from ...core.db_models.app_auth_models import GoogleAccount, PasswordResetToken, User
 from ...core.db_models.google_drive_models import BackupFile
+from ...core.db_models.user_config_models import UserPreferences
 from ...core.security import (
     create_access_token,
     get_current_user,
@@ -61,10 +63,19 @@ def login(login_data: LoginData, db: Session) -> dict:
 
 def start_reset_password(token: str, db: Session):
     code: str = f"{secrets.randbelow(1_000_000):06d}"
-    created_at = datetime.now()
-    expires_at = datetime.now() + timedelta(minutes=10)
+    created_at = datetime.now(timezone.utc)
+    expires_at = created_at + timedelta(minutes=10)
 
     user = get_user_by_identificator(db=db, identificator=token)
+    user_preferences = db.scalar(
+        select(UserPreferences).where(UserPreferences.id_user == user.id)
+    )
+    timezone_name = (
+        user_preferences.preferences.get("timezone", "UTC")
+        if user_preferences is not None
+        else "UTC"
+    )
+    user_timezone = ZoneInfo(timezone_name)
 
     pwd_reset = PasswordResetToken(
         id=uuid4(),
@@ -91,8 +102,14 @@ def start_reset_password(token: str, db: Session):
     msg["To"] = destinatario
     msg["Subject"] = assunto
 
-    created_at_text = created_at.strftime("%d/%m/%Y às %H:%M")
-    expires_at_text = expires_at.strftime("%d/%m/%Y às %H:%M")
+    created_at_local_text = created_at.astimezone(user_timezone).strftime(
+        "%d/%m/%Y às %H:%M %Z"
+    )
+    expires_at_local_text = expires_at.astimezone(user_timezone).strftime(
+        "%d/%m/%Y às %H:%M %Z"
+    )
+    created_at_utc_text = created_at.strftime("%d/%m/%Y às %H:%M UTC")
+    expires_at_utc_text = expires_at.strftime("%d/%m/%Y às %H:%M UTC")
     html_content = f"""
   <!doctype html>
   <html lang="pt-BR">
@@ -109,7 +126,7 @@ def start_reset_password(token: str, db: Session):
             <p style="margin:28px 0 10px;font-size:12px;font-weight:bold;letter-spacing:1px;color:#718187;text-transform:uppercase;">Código de verificação</p>
             <div style="padding:18px 20px;text-align:center;background:#f7fafb;border:1px solid #dbe8eb;border-radius:8px;font-size:30px;font-weight:600;letter-spacing:8px;color:#2e6c80;">{escape(code)}</div>
             <p style="margin:16px 0 0;font-size:13px;line-height:1.5;color:#718187;">Este código expira em 10 minutos. Não compartilhe com outras pessoas.</p>
-            <p style="margin:24px 0 0;padding-top:20px;border-top:1px solid #edf0f1;font-size:12px;line-height:1.6;color:#718187;">Solicitado em: {created_at_text}<br>Expira em: {expires_at_text}</p>
+            <p style="margin:24px 0 0;padding-top:20px;border-top:1px solid #edf0f1;font-size:12px;line-height:1.6;color:#718187;">Solicitado em (hora local — {escape(timezone_name)}): {created_at_local_text}<br>Solicitado em (UTC): {created_at_utc_text}<br>Expira em (hora local — {escape(timezone_name)}): {expires_at_local_text}<br>Expira em (UTC): {expires_at_utc_text}</p>
             <p style="margin:20px 0 0;font-size:13px;line-height:1.6;color:#52636a;">Se você não solicitou essa alteração, ignore este e-mail. Sua senha permanecerá a mesma.</p>
             <p style="margin:28px 0 0;font-size:13px;line-height:1.5;">Atenciosamente,<br><strong style="color:#2e6c80;">Equipe Noema</strong></p>
           </div>
@@ -127,8 +144,10 @@ Recebemos uma solicitação para redefinir a senha da sua conta Noema.
 
 Seu código de verificação é: {code}
 
-Solicitado em: {created_at_text}
-Expira em: {expires_at_text}
+Solicitado em (hora local — {timezone_name}): {created_at_local_text}
+Solicitado em (UTC): {created_at_utc_text}
+Expira em (hora local — {timezone_name}): {expires_at_local_text}
+Expira em (UTC): {expires_at_utc_text}
 
 Se você não solicitou essa alteração, ignore este e-mail.
 
@@ -166,13 +185,13 @@ def confirm_password_reset(code: str, token: str, db: Session, new_password):
             and_(
                 PasswordResetToken.user_id == user.id,
                 PasswordResetToken.used_at.is_(None),
-                PasswordResetToken.expires_at > datetime.now(),
+                PasswordResetToken.expires_at > datetime.now(timezone.utc),
                 PasswordResetToken.token_hash == code,
             )
         )
     )
     if reset_call:
-        reset_call.used_at = datetime.now()
+        reset_call.used_at = datetime.now(timezone.utc)
 
         user_data = UserUpdate(password=new_password)
         udp_data = dict()
@@ -185,7 +204,7 @@ def confirm_password_reset(code: str, token: str, db: Session, new_password):
             else:
                 udp_data[k] = v
                 setattr(user, k, v)
-        user.updated_at = datetime.now()
+        user.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(user)
         return "Sucesso"  ## TODO concertar
