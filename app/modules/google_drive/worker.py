@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from ...core.db_models.google_drive_models import SyncOperation
 
@@ -159,7 +160,7 @@ def claim_operation(db: Session, operation_id: UUID) -> SyncOperation | None:
 
 async def process_operation(db: Session, operation_id: UUID) -> SyncOperation | None:
     """Fail queued legacy work without contacting Google Drive."""
-    operation = db.get(SyncOperation, operation_id)
+    operation = await run_in_threadpool(db.get, SyncOperation, operation_id)
     if operation is None:
         return None
     if operation.state in {"pending", "uploading"}:
@@ -167,23 +168,28 @@ async def process_operation(db: Session, operation_id: UUID) -> SyncOperation | 
         operation.error_code = "client_side_drive_sync_required"
         operation.next_attempt_at = None
         operation.updated_at = datetime.now(timezone.utc)
-        db.commit()
+        await run_in_threadpool(db.commit)
     return operation
 
 
 async def process_pending_operations(db: Session, limit: int = 20) -> int:
     """Retire queued legacy work without performing Drive requests."""
-    recover_stuck_operations(db)
-    ids = list(
-        db.scalars(
-            select(SyncOperation.id)
-            .where(
-                SyncOperation.state == "pending",
-                (SyncOperation.next_attempt_at.is_(None))
-                | (SyncOperation.next_attempt_at <= datetime.now(timezone.utc)),
+    await run_in_threadpool(recover_stuck_operations, db)
+    ids = await run_in_threadpool(
+        lambda: list(
+            db.scalars(
+                select(SyncOperation.id)
+                .where(
+                    SyncOperation.state == "pending",
+                    (SyncOperation.next_attempt_at.is_(None))
+                    | (
+                        SyncOperation.next_attempt_at
+                        <= datetime.now(timezone.utc)
+                    ),
+                )
+                .order_by(SyncOperation.created_at)
+                .limit(limit)
             )
-            .order_by(SyncOperation.created_at)
-            .limit(limit)
         )
     )
     for operation_id in ids:

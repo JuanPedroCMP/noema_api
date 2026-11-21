@@ -3,6 +3,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import func, select
+from starlette.concurrency import run_in_threadpool
 from app.modules.ai_provider.models import ExternalResourcesOut, GbBook, S2SearchResult, SearchQueries, TavilyResponse, YtSearchResult
 from app.modules.ai_provider.services.services import (
     get_books,
@@ -57,7 +58,11 @@ async def use_ai(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ):
-    language = _resolve_response_language(db, response_language)
+    language = await run_in_threadpool(
+        _resolve_response_language,
+        db,
+        response_language,
+    )
     ai_provider = AiProvider(db=db, user_token=token)
     logger.info("Starting AI generation for agent %s.", agent_id)
     try:
@@ -93,7 +98,11 @@ async def get_materials(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ):
-    language = _resolve_response_language(db, response_language)
+    language = await run_in_threadpool(
+        _resolve_response_language,
+        db,
+        response_language,
+    )
     ai_provider = AiProvider(db=db, user_token=token)
     try:
         result: SearchQueries = await asyncio.wait_for(

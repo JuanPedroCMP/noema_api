@@ -14,6 +14,7 @@ from uuid import UUID
 from pydantic import ValidationError
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from ....core.ai_endpoint import validate_ai_endpoint
 from ....core.db_models.ai_models import (
@@ -518,6 +519,83 @@ class AiProvider:
             self.user_token,
         )
 
+    def _prepare_call_context(
+        self,
+        agent_id: UUID,
+        response_language: str | None,
+    ) -> tuple[
+        UUID,
+        Agent,
+        Any,
+        list[tuple[AiModel, float, AgentModel]],
+        str | None,
+    ]:
+        try:
+            user = get_current_user(token=self.user_token, db=self.db)
+            agent = self.db.scalar(
+                select(Agent).where(
+                    Agent.id == agent_id,
+                    or_(Agent.id_user.is_(None), Agent.id_user == user.id),
+                    Agent.is_active.is_(True),
+                )
+            )
+            if agent is None:
+                raise RuntimeError("Agent not found.")
+
+            response_model = self._get_response_model(agent.task)
+            preference_order = self._calculate_preference_order(agent_id, user.id)
+            response_language = response_language or self._get_response_language(user.id)
+            self.db.commit()
+            return (
+                user.id,
+                agent,
+                response_model,
+                preference_order,
+                response_language,
+            )
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def _prepare_model_attempt(
+        self,
+        model: AiModel,
+        agent: Agent,
+        agent_model: AgentModel,
+        owner_id: UUID,
+        key_source: str,
+    ) -> tuple[
+        bool,
+        tuple[list[UserApiKey | SharedApiKey], Any, str, float] | None,
+    ]:
+        try:
+            api_keys = (
+                self._get_api_keys(model)
+                if key_source == "personal"
+                else self._get_shared_api_keys(model)
+            )
+            if not api_keys:
+                self.db.commit()
+                return False, None
+
+            provider = get_provider(
+                db=self.db,
+                identificator=str(model.id_ai_provider),
+                owner_id=owner_id,
+            )
+            if model.is_active is False or provider.is_active is False:
+                self.db.commit()
+                return True, None
+
+            system_prompt, temperature = self._get_prompt_settings(
+                agent, agent_model
+            )
+            self.db.commit()
+            return True, (api_keys, provider, system_prompt, temperature)
+        except Exception:
+            self.db.rollback()
+            raise
+
     async def call_ai(
         self,
         user_prompt: str,
@@ -528,44 +606,41 @@ class AiProvider:
         if not user_prompt.strip():
             raise ValueError("The user prompt cannot be empty.")
 
-        user = get_current_user(token=self.user_token, db=self.db)
-        agent = self.db.scalar(
-            select(Agent).where(
-                Agent.id == agent_id,
-                or_(Agent.id_user.is_(None), Agent.id_user == user.id),
-                Agent.is_active.is_(True),
-            )
+        (
+            owner_id,
+            agent,
+            response_model,
+            preference_order,
+            response_language,
+        ) = await run_in_threadpool(
+            self._prepare_call_context,
+            agent_id,
+            response_language,
         )
-        if agent is None:
-            raise RuntimeError("Agent not found.")
-        response_model = self._get_response_model(agent.task)
         failures: list[str] = []
-        preference_order = self._calculate_preference_order(agent_id, user.id)
         has_configured_keys = False
-        response_language = response_language or self._get_response_language(user.id)
+        model_names = {
+            id(model): model.display_name
+            for model, _, _agent_model in preference_order
+        }
 
         for key_source in ("personal", "shared"):
             for model, _, agent_model in preference_order:
                 try:
-                    api_keys = (
-                        self._get_api_keys(model)
-                        if key_source == "personal"
-                        else self._get_shared_api_keys(model)
+                    has_keys, attempt = await run_in_threadpool(
+                        self._prepare_model_attempt,
+                        model,
+                        agent,
+                        agent_model,
+                        owner_id,
+                        key_source,
                     )
-                    if not api_keys:
+                    if not has_keys:
                         continue
                     has_configured_keys = True
-
-                    provider = get_provider(
-                        db=self.db,
-                        identificator=str(model.id_ai_provider),
-                        owner_id=user.id,
-                    )
-                    if model.is_active is False or provider.is_active is False:
+                    if attempt is None:
                         continue
-                    system_prompt, temperature = self._get_prompt_settings(
-                        agent, agent_model
-                    )
+                    api_keys, provider, system_prompt, temperature = attempt
                     if response_language:
                         system_prompt = (
                             f"{system_prompt}\n\n"
@@ -582,10 +657,14 @@ class AiProvider:
                         user_prompt,
                         response_model,
                     )
-                    self._record_usage(agent_model, raw_response)
+                    await run_in_threadpool(
+                        self._record_usage, agent_model, raw_response
+                    )
                     return parsed
                 except Exception as exc:
-                    failures.append(f"{model.display_name} ({key_source} keys): {exc}")
+                    failures.append(
+                        f"{model_names[id(model)]} ({key_source} keys): {exc}"
+                    )
                     logger.warning(
                         "Configured AI model failed for agent %s.",
                         agent_id,

@@ -14,6 +14,7 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from ...core.database import get_db
 from ...core.db_models.google_drive_models import SyncDirection
@@ -71,18 +72,32 @@ _GOOGLE_OAUTH_RATE_LIMIT = 10
 _API_RATE_LIMIT = 120
 _rate_limit_requests: dict[str, deque[float]] = defaultdict(deque)
 _rate_limit_lock = Lock()
+_last_rate_limit_cleanup = 0.0
+
+
+def _prune_rate_limit_hits(requests: deque[float], now: float) -> None:
+    while requests and now - requests[0] >= _RATE_LIMIT_WINDOW_SECONDS:
+        requests.popleft()
+
+
+def _cleanup_expired_rate_limits(now: float) -> None:
+    global _last_rate_limit_cleanup
+    if now - _last_rate_limit_cleanup < _RATE_LIMIT_WINDOW_SECONDS:
+        return
+
+    for key, hits in tuple(_rate_limit_requests.items()):
+        _prune_rate_limit_hits(hits, now)
+        if not hits:
+            del _rate_limit_requests[key]
+    _last_rate_limit_cleanup = now
 
 
 def _consume_rate_limit(user_id: str, limit: int, code: str, message: str) -> None:
     now = monotonic()
     with _rate_limit_lock:
-        for key in tuple(_rate_limit_requests):
-            hits = _rate_limit_requests[key]
-            while hits and now - hits[0] >= _RATE_LIMIT_WINDOW_SECONDS:
-                hits.popleft()
-            if not hits:
-                del _rate_limit_requests[key]
+        _cleanup_expired_rate_limits(now)
         requests = _rate_limit_requests[user_id]
+        _prune_rate_limit_hits(requests, now)
         if len(requests) >= limit:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -160,7 +175,7 @@ async def oauth_callback_endpoint(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     if error is not None:
-        oauth_cancel(state, db, error)
+        await run_in_threadpool(oauth_cancel, state, db, error)
         return HTMLResponse(
             "<!doctype html><html><meta charset='utf-8'><title>Noema</title>"
             "<p>A autorização foi cancelada. Você pode fechar esta página e "
@@ -172,9 +187,9 @@ async def oauth_callback_endpoint(
     try:
         await oauth_callback(code, state, db)
     except HTTPException:
-        db.rollback()
+        await run_in_threadpool(db.rollback)
         try:
-            oauth_cancel(state, db, "oauth_error")
+            await run_in_threadpool(oauth_cancel, state, db, "oauth_error")
         except HTTPException as state_error:
             detail = state_error.detail if isinstance(state_error.detail, dict) else {}
             if detail.get("code") != "invalid_oauth_state":
@@ -197,8 +212,11 @@ async def refresh_account(
     db: Session = Depends(get_db),
     token: str = Depends(oauth2_scheme),
 ) -> AccountRefreshOut:
-    user = get_current_user(token, db)
-    account = db.scalar(select(GoogleAccount).where(GoogleAccount.id_user == user.id))
+    user = await run_in_threadpool(get_current_user, token, db)
+    account = await run_in_threadpool(
+        db.scalar,
+        select(GoogleAccount).where(GoogleAccount.id_user == user.id),
+    )
     if account is None:
         raise HTTPException(status_code=404, detail={"code": "google_account_not_linked"})
     await refresh_access_token(account, db)
@@ -242,8 +260,13 @@ async def unlink_account(
     db: Session = Depends(get_db),
     token: str = Depends(oauth2_scheme),
 ) -> dict[str, bool]:
-    user = get_current_user(token, db)
-    account = db.scalar(select(GoogleAccount).where(GoogleAccount.id_user == user.id).with_for_update())
+    user = await run_in_threadpool(get_current_user, token, db)
+    account = await run_in_threadpool(
+        db.scalar,
+        select(GoogleAccount)
+        .where(GoogleAccount.id_user == user.id)
+        .with_for_update(),
+    )
     if account is None:
         return {"unlinked": True, "google_grant_revoked": True}
     google_grant_revoked = await unlink_google_account(account, db)

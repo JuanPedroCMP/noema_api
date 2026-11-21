@@ -10,6 +10,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
+from starlette.concurrency import run_in_threadpool
 
 from ...core.db_models.google_drive_models import (
     BackupFile,
@@ -111,24 +112,28 @@ async def link_google_account(
     link_request: GoogleAccountLinkRequest,
     db: Session,
 ) -> GoogleAccountStatusOut:
-    user = get_current_user(token, db)
+    user = await run_in_threadpool(get_current_user, token, db)
+    user_id = user.id
+    await run_in_threadpool(db.rollback)
     google_user_id, email, scopes = await verify_google_tokens(
         link_request.google_id_token.get_secret_value(),
         link_request.google_access_token.get_secret_value(),
     )
     now = datetime.now(timezone.utc)
-    accounts = db.scalars(
-        select(GoogleAccount)
-        .where(
-            or_(
-                GoogleAccount.id_user == user.id,
-                GoogleAccount.google_user_id == google_user_id,
+    accounts = await run_in_threadpool(
+        lambda: db.scalars(
+            select(GoogleAccount)
+            .where(
+                or_(
+                    GoogleAccount.id_user == user_id,
+                    GoogleAccount.google_user_id == google_user_id,
+                )
             )
-        )
-        .with_for_update()
-    ).all()
+            .with_for_update()
+        ).all()
+    )
     account_for_user = next(
-        (account for account in accounts if account.id_user == user.id), None
+        (account for account in accounts if account.id_user == user_id), None
     )
     account_for_google_user = next(
         (account for account in accounts if account.google_user_id == google_user_id),
@@ -136,7 +141,7 @@ async def link_google_account(
     )
     if (
         account_for_google_user is not None
-        and account_for_google_user.id_user != user.id
+        and account_for_google_user.id_user != user_id
     ):
         raise _conflict(
             "google_account_unavailable",
@@ -169,20 +174,21 @@ async def link_google_account(
         "updated_at": now,
     }
     if account is None:
-        account = GoogleAccount(id=uuid4(), id_user=user.id, created_at=now, **values)
+        account = GoogleAccount(id=uuid4(), id_user=user_id, created_at=now, **values)
         db.add(account)
     else:
         for field, value in values.items():
             setattr(account, field, value)
     try:
-        db.commit()
+        await run_in_threadpool(db.commit)
     except IntegrityError:
-        db.rollback()
-        account = db.scalar(
+        await run_in_threadpool(db.rollback)
+        account = await run_in_threadpool(
+            db.scalar,
             select(GoogleAccount).where(
-                GoogleAccount.id_user == user.id,
+                GoogleAccount.id_user == user_id,
                 GoogleAccount.google_user_id == google_user_id,
-            )
+            ),
         )
         if account is not None and account.email_google == email:
             return _account_status(account)
@@ -190,7 +196,7 @@ async def link_google_account(
             "google_account_unavailable",
             "This Google account cannot be linked to the authenticated user.",
         ) from None
-    db.refresh(account)
+    await run_in_threadpool(db.refresh, account)
     return _account_status(account)
 
 
@@ -199,12 +205,17 @@ async def refresh_google_account_status(
     link_request: GoogleAccountLinkRequest,
     db: Session,
 ) -> GoogleAccountStatusOut:
-    user = get_current_user(token, db)
+    user = await run_in_threadpool(get_current_user, token, db)
+    user_id = user.id
+    await run_in_threadpool(db.rollback)
     google_user_id, email = await verify_google_identity(
         link_request.google_id_token.get_secret_value()
     )
-    account = db.scalar(
-        select(GoogleAccount).where(GoogleAccount.id_user == user.id).with_for_update()
+    account = await run_in_threadpool(
+        db.scalar,
+        select(GoogleAccount)
+        .where(GoogleAccount.id_user == user_id)
+        .with_for_update(),
     )
     if account is None or account.google_user_id != google_user_id:
         raise _not_found()
@@ -226,8 +237,8 @@ async def refresh_google_account_status(
         account.scope_checked_at = datetime.now(timezone.utc)
         account.is_active = False
         account.updated_at = account.scope_checked_at
-        db.commit()
-        db.refresh(account)
+        await run_in_threadpool(db.commit)
+        await run_in_threadpool(db.refresh, account)
         return _account_status(account)
 
     account.email_google = email
@@ -238,8 +249,8 @@ async def refresh_google_account_status(
     account.scope_checked_at = datetime.now(timezone.utc)
     account.is_active = True
     account.updated_at = account.scope_checked_at
-    db.commit()
-    db.refresh(account)
+    await run_in_threadpool(db.commit)
+    await run_in_threadpool(db.refresh, account)
     return _account_status(account)
 
 

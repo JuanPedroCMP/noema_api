@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException, status
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from ...core.db_models.google_drive_models import (
     BackupFile,
@@ -189,12 +190,13 @@ def oauth_start(token: str, redirect_uri: str, db: Session) -> dict[str, str]:
 
 
 async def oauth_callback(code: str, state: str, db: Session) -> dict[str, str]:
-    row = db.scalar(
+    row = await run_in_threadpool(
+        db.scalar,
         select(OAuthState).where(
             OAuthState.state_hash == _hash(state),
             OAuthState.consumed_at.is_(None),
             OAuthState.expires_at > datetime.now(timezone.utc),
-        ).with_for_update()
+        ).with_for_update(),
     )
     if row is None:
         raise HTTPException(status_code=400, detail={"code": "invalid_oauth_state"})
@@ -265,12 +267,18 @@ async def oauth_callback(code: str, state: str, db: Session) -> dict[str, str]:
         or GOOGLE_DRIVE_APPDATA_SCOPE not in str(payload.get("scope", "")).split()
     ):
         raise HTTPException(status_code=401, detail={"code": "invalid_google_identity"})
-    account = db.scalar(select(GoogleAccount).where(GoogleAccount.id_user == row.id_user).with_for_update())
-    conflicting = db.scalar(
+    account = await run_in_threadpool(
+        db.scalar,
+        select(GoogleAccount)
+        .where(GoogleAccount.id_user == row.id_user)
+        .with_for_update(),
+    )
+    conflicting = await run_in_threadpool(
+        db.scalar,
         select(GoogleAccount).where(
             GoogleAccount.google_user_id == str(identity.get("sub")),
             GoogleAccount.id_user != row.id_user,
-        )
+        ),
     )
     if conflicting is not None:
         raise HTTPException(status_code=409, detail={"code": "google_account_unavailable"})
@@ -278,7 +286,8 @@ async def oauth_callback(code: str, state: str, db: Session) -> dict[str, str]:
         None,
         str(identity["sub"]),
     }:
-        retained_backups = db.scalar(
+        retained_backups = await run_in_threadpool(
+            db.scalar,
             select(BackupFile.id)
             .where(BackupFile.id_google_account == account.id)
             .limit(1)
@@ -309,7 +318,7 @@ async def oauth_callback(code: str, state: str, db: Session) -> dict[str, str]:
     account.granted_scopes = f"openid email {GOOGLE_DRIVE_APPDATA_SCOPE}"
     account.updated_at = now
     row.consumed_at = now
-    db.commit()
+    await run_in_threadpool(db.commit)
     _access_tokens[account.id] = (
         access_token,
         now + timedelta(seconds=int(payload.get("expires_in", 3600))),
@@ -334,12 +343,16 @@ async def refresh_access_token(account: GoogleAccount, db: Session) -> str:
         byteorder="big",
         signed=True,
     )
-    db.execute(
+    await run_in_threadpool(
+        db.execute,
         text("SELECT pg_advisory_xact_lock(CAST(:lock_key AS BIGINT))"),
         {"lock_key": lock_key},
     )
-    locked = db.scalar(
-        select(GoogleAccount).where(GoogleAccount.id == account.id).with_for_update()
+    locked = await run_in_threadpool(
+        db.scalar,
+        select(GoogleAccount)
+        .where(GoogleAccount.id == account.id)
+        .with_for_update(),
     )
     if locked is None:
         raise HTTPException(status_code=404, detail={"code": "google_account_not_linked"})
@@ -373,7 +386,7 @@ async def _exchange_refresh(account: GoogleAccount, db: Session) -> str:
             account.is_active = False
             account.drive_appdata_status = "revoked"
             account.updated_at = datetime.now(timezone.utc)
-            db.commit()
+            await run_in_threadpool(db.commit)
             raise HTTPException(status_code=401, detail={"code": "google_authorization_revoked"})
         raise HTTPException(status_code=502, detail={"code": "google_refresh_failed"})
     try:
@@ -396,7 +409,7 @@ async def _exchange_refresh(account: GoogleAccount, db: Session) -> str:
     account.expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(payload.get("expires_in", 3600)))
     account.last_refresh_at = datetime.now(timezone.utc)
     account.updated_at = account.last_refresh_at
-    db.commit()
+    await run_in_threadpool(db.commit)
     _access_tokens[account.id] = (
         access_token,
         account.expires_at or datetime.now(timezone.utc),
@@ -416,7 +429,7 @@ async def drive_request(
         response = await client.request(method, url, headers=headers, **kwargs)
     if response.status_code == 401:
         account.expires_at = datetime.now(timezone.utc)
-        db.commit()
+        await run_in_threadpool(db.commit)
         access_token = await refresh_access_token(account, db)
         headers["Authorization"] = "Bearer " + access_token
         async with httpx.AsyncClient(timeout=60) as client:
@@ -449,11 +462,14 @@ async def drive_stream(
 
 
 async def unlink_google_account(account: GoogleAccount, db: Session) -> bool:
-    pending = db.scalar(
-        select(SyncOperation.id).where(
+    pending = await run_in_threadpool(
+        db.scalar,
+        select(SyncOperation.id)
+        .where(
             SyncOperation.id_google_account == account.id,
             SyncOperation.state.in_(("pending", "uploading")),
-        ).limit(1)
+        )
+        .limit(1),
     )
     if pending is not None:
         raise HTTPException(
@@ -495,5 +511,5 @@ async def unlink_google_account(account: GoogleAccount, db: Session) -> bool:
     account.is_active = False
     account.drive_appdata_status = "revoked"
     account.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    await run_in_threadpool(db.commit)
     return remote_revoked

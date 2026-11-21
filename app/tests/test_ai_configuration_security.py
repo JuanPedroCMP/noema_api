@@ -238,9 +238,19 @@ def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
     shared_key = object()
 
     class Db:
+        def __init__(self):
+            self.commits = 0
+
         def scalar(self, _statement):
             return agent
 
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            pass
+
+    db = Db()
     monkeypatch.setattr(
         ai_compatibility_layer, "get_current_user", lambda **_kwargs: user
     )
@@ -292,6 +302,7 @@ def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
         _self, model, _api_keys, _provider, _system_prompt, _temperature,
         _user_prompt, _response_model,
     ):
+        assert db.commits >= 4
         invoked_models.append(model)
         invoked_keys.append(_api_keys)
         invoked_prompts.append(_system_prompt)
@@ -307,7 +318,7 @@ def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
     )
 
     result = asyncio.run(
-        ai_compatibility_layer.AiProvider(Db(), "token").call_ai("prompt", agent_id)
+        ai_compatibility_layer.AiProvider(db, "token").call_ai("prompt", agent_id)
     )
 
     assert result == "response"
@@ -489,6 +500,32 @@ def test_ai_generation_timeout_is_four_minutes():
     assert router.AI_GENERATION_TIMEOUT_SECONDS == 240
     assert ai_compatibility_layer.AI_MODEL_REQUEST_TIMEOUT_SECONDS == 240
     assert ai_compatibility_layer.AI_MODEL_HTTP_TIMEOUT_SECONDS == 240
+
+
+def test_ai_generation_database_work_does_not_block_event_loop(monkeypatch):
+    from app.modules.ai_provider.models import CreateFlashcard
+    from app.modules.ai_provider.services.ai_compatibility_layer import AiProvider
+
+    provider = AiProvider(object(), "token")
+
+    def slow_prepare(_agent_id, _response_language):
+        import time
+
+        time.sleep(0.1)
+        return uuid4(), object(), CreateFlashcard, [], None
+
+    monkeypatch.setattr(provider, "_prepare_call_context", slow_prepare)
+
+    async def verify_responsiveness():
+        generation = asyncio.create_task(
+            provider.call_ai("prompt", uuid4())
+        )
+        await asyncio.sleep(0.01)
+        assert not generation.done()
+        with pytest.raises(RuntimeError, match="No models are configured"):
+            await generation
+
+    asyncio.run(verify_responsiveness())
 
 
 def test_structured_response_still_rejects_missing_required_fields():
