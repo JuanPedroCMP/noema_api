@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Json, Field
+from pydantic import BaseModel, Json, Field, model_validator
 from uuid import UUID
 from enum import Enum
 
@@ -172,13 +172,35 @@ class CreateFeynmanResponse(BaseModel):
 class CreateMultipleChoiceQuestionResponse(BaseModel):
     title: str
     statement: str
-    choises: list[Choise]
+    choices: list[Choise] = Field(min_length=4)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_choices_key(cls, value):
+        if isinstance(value, dict) and "choices" not in value and "choises" in value:
+            value = {**value, "choices": value["choises"]}
+        return value
+
+    @model_validator(mode="after")
+    def require_one_correct_choice(self):
+        if sum(choice.is_correct for choice in self.choices) != 1:
+            raise ValueError("A questão deve ter exatamente uma alternativa correta.")
+        return self
+
 
 class Choise(BaseModel):
     is_correct: bool
     statement: str
     explanation: str
-    weigth: int
+    weight: int = Field(ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_weight_key(cls, value):
+        if isinstance(value, dict) and "weight" not in value and "weigth" in value:
+            value = {**value, "weight": value["weigth"]}
+        return value
+
 
 ###################
 ### EvaluateMultipleChoiceQuestionResponse
