@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import logging
-import importlib
 import asyncio
+import importlib
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from time import perf_counter
 from typing import Any
 from uuid import UUID
 
+from fastapi import HTTPException, status
 from pydantic import ValidationError
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -23,36 +24,34 @@ from ....core.db_models.ai_models import (
     AiModel,
     SharedApiKey,
     UserApiKey,
+    UserApiKeyCanUseIaModel,
 )
-from ....core.security import decrypt, get_current_user
 from ....core.db_models.user_config_models import (
     Language,
     ResponseLanguagePreferenceOrder,
     UserGlobalConfig,
 )
+from ....core.security import decrypt, get_current_user
 from ...ai.models import AgentModelFilters, AiUsageLogCreate
 from ...ai.services import (
     create_ai_usage_log,
-    get_ai_model,
     get_provider,
-    get_user_api_key,
     list_agent_models,
-    list_user_api_key_can_use_ia_model,
 )
 from ..models import (
     CreateEssayQuestionResponse,
+    CreateFeynmanResponse,
     CreateFlashcard,
     CreateFlashcardGroup,
     CreateFlashcardsResponse,
-    CreateFeynmanResponse,
     CreateMultipleChoiceQuestionResponse,
     CreateStudySessionResponse,
     EvaluateEssayQuestionResponse,
     EvaluateFeynmanResponse,
     EvaluateMultipleChoiceQuestionResponse,
     GenerateNodeDescription,
-    ManipulateGraphResponse,
     ManipulateFlashcardGroup,
+    ManipulateGraphResponse,
     ManipulateNodeResponse,
     SearchQueries,
     StudyAssistentResponse,
@@ -70,7 +69,7 @@ QUALITY_SCORES = {
     "excellent": 10.0,
 }
 AI_MODEL_REQUEST_TIMEOUT_SECONDS = 240
-AI_MODEL_HTTP_TIMEOUT_SECONDS = 240
+AI_MODEL_HTTP_TIMEOUT_SECONDS = AI_MODEL_REQUEST_TIMEOUT_SECONDS + 30
 
 # Keep every planned task here. Some response classes are intentionally not
 # defined yet and can be added to app.modules.ai_provider.models later.
@@ -142,12 +141,22 @@ class AiProvider:
         )
         preference_order: list[tuple[AiModel, float, AgentModel]] = []
 
+        model_ids = {agent_model.id_ai_model for agent_model in agent_models}
+        models_by_id: dict[UUID, AiModel] = {}
+        if model_ids:
+            models_by_id = {
+                model.id: model
+                for model in self.db.scalars(
+                    select(AiModel).where(AiModel.id.in_(model_ids))
+                ).all()
+            }
+
         for agent_model in agent_models:
-            model = get_ai_model(
-                identificator=str(agent_model.id_ai_model),
-                db=self.db,
-                owner_id=owner_id,
-            )
+            model = models_by_id.get(agent_model.id_ai_model)
+            if model is None:
+                raise RuntimeError(
+                    f"AI model '{agent_model.id_ai_model}' could not be loaded."
+                )
             quality = getattr(agent_model.quality_expected, "value", None)
             quality_score = QUALITY_SCORES.get(quality or "fair", 2.5)
             token_capacity = (model.input_token_limit or 0) + (
@@ -200,42 +209,52 @@ class AiProvider:
         )
         return system_prompt, temperature
 
-    def _get_api_keys(self, model: AiModel) -> list[UserApiKey]:
-        links = list_user_api_key_can_use_ia_model(
-            db=self.db,
-            filters={"id_ai_model": model.id},
-            token=self.user_token,
-        )
-        if not links:
-            return []
+    def _load_model_api_keys(
+        self,
+        owner_id: UUID,
+        preference_order: Sequence[tuple[AiModel, float, AgentModel]],
+    ) -> tuple[
+        dict[UUID, list[UserApiKey]],
+        dict[UUID, list[SharedApiKey]],
+    ]:
+        model_ids = {model.id for model, _, _ in preference_order}
+        if not model_ids:
+            return {}, {}
 
-        keys: list[UserApiKey] = []
-        for link in links:
-            try:
-                key = get_user_api_key(
-                    token=self.user_token,
-                    identificator=str(link.id_user_api_key),
-                    db=self.db,
-                )
-                if key.is_active:
-                    keys.append(key)
-            except Exception:
-                logger.warning(
-                    "Unable to load an API key for model %s.",
-                    model.display_name,
-                    exc_info=True,
-                )
-        return keys
+        personal_keys_by_model: dict[UUID, list[UserApiKey]] = {}
+        personal_key_rows = self.db.execute(
+            select(UserApiKeyCanUseIaModel.id_ai_model, UserApiKey)
+            .join(
+                UserApiKey,
+                UserApiKey.id == UserApiKeyCanUseIaModel.id_user_api_key,
+            )
+            .join(AiModel, AiModel.id == UserApiKeyCanUseIaModel.id_ai_model)
+            .where(
+                UserApiKeyCanUseIaModel.id_ai_model.in_(model_ids),
+                UserApiKey.id_user == owner_id,
+                UserApiKey.is_active.is_(True),
+                UserApiKey.id_ai_provider == AiModel.id_ai_provider,
+            )
+        ).all()
+        for model_id, api_key in personal_key_rows:
+            personal_keys_by_model.setdefault(model_id, []).append(api_key)
 
-    def _get_shared_api_keys(self, model: AiModel) -> list[SharedApiKey]:
-        return list(
-            self.db.scalars(
-                select(SharedApiKey).where(
-                    SharedApiKey.id_ai_provider == model.id_ai_provider,
-                    SharedApiKey.is_active.is_(True),
-                )
-            ).all()
-        )
+        shared_keys_by_model: dict[UUID, list[SharedApiKey]] = {}
+        shared_key_rows = self.db.execute(
+            select(AiModel.id, SharedApiKey)
+            .join(
+                SharedApiKey,
+                SharedApiKey.id_ai_provider == AiModel.id_ai_provider,
+            )
+            .where(
+                AiModel.id.in_(model_ids),
+                SharedApiKey.is_active.is_(True),
+            )
+        ).all()
+        for model_id, api_key in shared_key_rows:
+            shared_keys_by_model.setdefault(model_id, []).append(api_key)
+
+        return personal_keys_by_model, shared_keys_by_model
 
     def _get_response_language(self, user_id: UUID) -> str | None:
         preferred_language = self.db.scalar(
@@ -274,8 +293,11 @@ class AiProvider:
         user_prompt: str,
         response_model: Any,
     ) -> tuple[Any, Any]:
-        init_chat_model, chat_prompt_template = _import_langchain()
+        init_chat_model, chat_prompt_template = await asyncio.to_thread(
+            _import_langchain
+        )
         last_error: Exception | None = None
+        attempt_errors: list[Exception] = []
 
         for api_key in api_keys:
             attempt_started = perf_counter()
@@ -403,6 +425,7 @@ class AiProvider:
                         ) from correction_error
             except Exception as exc:
                 last_error = exc
+                attempt_errors.append(exc)
                 logger.warning(
                     "AI model %s failed after %.2fs: %s",
                     model.display_name,
@@ -410,16 +433,21 @@ class AiProvider:
                     _format_provider_error(exc),
                 )
 
-        raise RuntimeError(
+        message = (
             f"All API keys for model '{model.display_name}' failed: "
             f"{_format_provider_error(last_error) if last_error else 'Unknown error.'}"
-        ) from last_error
+        )
+        if attempt_errors and all(
+            isinstance(error, TimeoutError) for error in attempt_errors
+        ):
+            raise TimeoutError(message) from last_error
+        raise RuntimeError(message) from last_error
 
     def _parse_model_result(
         self, result: Any, response_model: Any
     ) -> tuple[Any, Any]:
         if not isinstance(result, Mapping):
-            raise ValueError("The AI provider returned an invalid response.")
+            raise TypeError("The AI provider returned an invalid response.")
 
         raw_response = result.get("raw")
         parsed = result.get("parsed")
@@ -497,7 +525,7 @@ class AiProvider:
     def _try_recover_response(self, raw_response: Any, response_model: Any) -> Any:
         """Recover malformed structured output when the provider returned text."""
         if not isinstance(raw_response, str):
-            raise ValueError("The failed AI response was not text.")
+            raise TypeError("The failed AI response was not text.")
         from .jsonServices import JsonHelper
 
         return JsonHelper()._parse_model_response(raw_response, response_model)
@@ -529,6 +557,8 @@ class AiProvider:
         Any,
         list[tuple[AiModel, float, AgentModel]],
         str | None,
+        dict[UUID, list[UserApiKey]],
+        dict[UUID, list[SharedApiKey]],
     ]:
         try:
             user = get_current_user(token=self.user_token, db=self.db)
@@ -544,6 +574,9 @@ class AiProvider:
 
             response_model = self._get_response_model(agent.task)
             preference_order = self._calculate_preference_order(agent_id, user.id)
+            personal_keys_by_model, shared_keys_by_model = (
+                self._load_model_api_keys(user.id, preference_order)
+            )
             response_language = response_language or self._get_response_language(user.id)
             self.db.commit()
             return (
@@ -552,6 +585,8 @@ class AiProvider:
                 response_model,
                 preference_order,
                 response_language,
+                personal_keys_by_model,
+                shared_keys_by_model,
             )
         except Exception:
             self.db.rollback()
@@ -563,21 +598,9 @@ class AiProvider:
         agent: Agent,
         agent_model: AgentModel,
         owner_id: UUID,
-        key_source: str,
-    ) -> tuple[
-        bool,
-        tuple[list[UserApiKey | SharedApiKey], Any, str, float] | None,
-    ]:
+        api_keys: Sequence[UserApiKey | SharedApiKey],
+    ) -> tuple[Sequence[UserApiKey | SharedApiKey], Any, str, float] | None:
         try:
-            api_keys = (
-                self._get_api_keys(model)
-                if key_source == "personal"
-                else self._get_shared_api_keys(model)
-            )
-            if not api_keys:
-                self.db.commit()
-                return False, None
-
             provider = get_provider(
                 db=self.db,
                 identificator=str(model.id_ai_provider),
@@ -585,13 +608,13 @@ class AiProvider:
             )
             if model.is_active is False or provider.is_active is False:
                 self.db.commit()
-                return True, None
+                return None
 
             system_prompt, temperature = self._get_prompt_settings(
                 agent, agent_model
             )
             self.db.commit()
-            return True, (api_keys, provider, system_prompt, temperature)
+            return api_keys, provider, system_prompt, temperature
         except Exception:
             self.db.rollback()
             raise
@@ -612,32 +635,49 @@ class AiProvider:
             response_model,
             preference_order,
             response_language,
+            personal_keys_by_model,
+            shared_keys_by_model,
         ) = await run_in_threadpool(
             self._prepare_call_context,
             agent_id,
             response_language,
         )
+        if preference_order and not any(
+            personal_keys_by_model.values()
+        ) and not any(shared_keys_by_model.values()):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    "No active API keys are configured for any model of this agent."
+                ),
+            )
+
         failures: list[str] = []
-        has_configured_keys = False
+        failure_errors: list[Exception] = []
         model_names = {
             id(model): model.display_name
-            for model, _, _agent_model in preference_order
+            for model, _, _ in preference_order
         }
 
         for key_source in ("personal", "shared"):
+            keys_by_model = (
+                personal_keys_by_model
+                if key_source == "personal"
+                else shared_keys_by_model
+            )
             for model, _, agent_model in preference_order:
+                api_keys = keys_by_model.get(model.id, [])
+                if not api_keys:
+                    continue
                 try:
-                    has_keys, attempt = await run_in_threadpool(
+                    attempt = await run_in_threadpool(
                         self._prepare_model_attempt,
                         model,
                         agent,
                         agent_model,
                         owner_id,
-                        key_source,
+                        api_keys,
                     )
-                    if not has_keys:
-                        continue
-                    has_configured_keys = True
                     if attempt is None:
                         continue
                     api_keys, provider, system_prompt, temperature = attempt
@@ -665,6 +705,7 @@ class AiProvider:
                     failures.append(
                         f"{model_names[id(model)]} ({key_source} keys): {exc}"
                     )
+                    failure_errors.append(exc)
                     logger.warning(
                         "Configured AI model failed for agent %s.",
                         agent_id,
@@ -672,11 +713,12 @@ class AiProvider:
                     )
 
         if not failures:
-            if preference_order and not has_configured_keys:
-                raise RuntimeError(
-                    f"No active API keys are configured for any model of agent '{agent_id}'."
-                )
             raise RuntimeError(f"No models are configured for agent '{agent_id}'.")
+        if all(isinstance(error, TimeoutError) for error in failure_errors):
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="AI generation timed out for every configured model.",
+            )
         raise RuntimeError(
             "AI generation failed for every configured model: "
             + " | ".join(failures)

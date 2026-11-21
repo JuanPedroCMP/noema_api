@@ -2,13 +2,15 @@
 
 import asyncio
 import os
+from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any, Callable, Coroutine, TypeVar
+from typing import Any, TypeVar
 
 from dotenv import load_dotenv
 
 _T = TypeVar("_T")
 _CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / ".env.api_utils"
+RESOURCE_SEARCH_HTTP_TIMEOUT_SECONDS = 30
 load_dotenv(dotenv_path=_CONFIG_PATH)
 
 
@@ -40,8 +42,14 @@ async def get_papers(query: str) -> dict[str, Any]:
                 "Semantic Scholar support is unavailable. Install semanticscholar."
             ) from exc
 
-        client = SemanticScholar(api_key=api_key)
+        client = SemanticScholar(
+            timeout=RESOURCE_SEARCH_HTTP_TIMEOUT_SECONDS,
+            api_key=api_key,
+            retry=False,
+        )
         result = client.search_paper(query=query.strip())
+        if not isinstance(result.raw_data, dict):
+            raise TypeError("Semantic Scholar returned an invalid response.")
         return result.raw_data
 
     return await _run_blocking(search)
@@ -64,7 +72,14 @@ async def get_videos(query: str, max_results: int = 10) -> list[dict[str, Any]]:
                 "YouTube support is unavailable. Install google-api-python-client."
             ) from exc
 
-        youtube = build("youtube", "v3", developerKey=api_key)
+        import httplib2
+
+        youtube = build(
+            "youtube",
+            "v3",
+            developerKey=api_key,
+            http=httplib2.Http(timeout=RESOURCE_SEARCH_HTTP_TIMEOUT_SECONDS),
+        )
         response = (
             youtube.search()
             .list(
@@ -101,6 +116,7 @@ async def get_search_results(query: str) -> dict[str, Any]:
             search_depth="advanced",
             max_results=15,
             include_usage=True,
+            timeout=RESOURCE_SEARCH_HTTP_TIMEOUT_SECONDS,
         )
 
     return await _run_blocking(search)
@@ -121,7 +137,14 @@ async def get_books(query: str) -> list[dict[str, Any]]:
                 "Google Books support is unavailable. Install google-api-python-client."
             ) from exc
 
-        books = build("books", "v1", developerKey=api_key)
+        import httplib2
+
+        books = build(
+            "books",
+            "v1",
+            developerKey=api_key,
+            http=httplib2.Http(timeout=RESOURCE_SEARCH_HTTP_TIMEOUT_SECONDS),
+        )
         response = books.volumes().list(q=query.strip(), maxResults=15).execute()
         return response.get("items", [])
 

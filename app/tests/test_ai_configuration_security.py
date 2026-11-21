@@ -1,10 +1,12 @@
 import asyncio
+import socket
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
-import socket
+from sqlalchemy.orm import Session
 
 from app.core import admin
 from app.core.ai_endpoint import validate_ai_endpoint
@@ -121,9 +123,66 @@ def test_personal_ai_configuration_requires_authentication():
         "/api/v1/ai/me/agents/{agent_id}",
         "/api/v1/ai/me/agent-models",
         "/api/v1/ai/me/agent-models/{link_id}",
+        "/api/v1/ai/user_api_key/delete/{identificator}",
     ):
         for operation in paths[path].values():
             assert "security" in operation
+
+
+def test_delete_user_api_key_removes_key_and_model_links(monkeypatch):
+    from app.core.db_models.ai_models import UserApiKeyCanUseIaModel
+    from app.modules.ai import services
+
+    user = SimpleNamespace(id=uuid4())
+    api_key = SimpleNamespace(id=uuid4(), id_user=user.id, is_active=True)
+    monkeypatch.setattr(services, "get_current_user", lambda _token, _db: user)
+
+    class Db:
+        def __init__(self):
+            self.deleted = []
+            self.executed = []
+            self.commits = 0
+
+        def scalar(self, statement):
+            assert user.id in statement.compile().params.values()
+            return api_key
+
+        def execute(self, statement):
+            self.executed.append(statement)
+
+        def delete(self, value):
+            self.deleted.append(value)
+
+        def commit(self):
+            self.commits += 1
+
+    db = Db()
+
+    assert services.delete_user_api_key("token", str(api_key.id), cast(Session, db))
+    assert len(db.executed) == 1
+    assert str(db.executed[0].table) == str(UserApiKeyCanUseIaModel.__table__)
+    assert db.deleted == [api_key]
+    assert db.commits == 1
+    assert api_key.is_active is True
+
+
+def test_delete_user_api_key_cannot_delete_another_users_key(monkeypatch):
+    from app.modules.ai import services
+
+    user = SimpleNamespace(id=uuid4())
+    other_users_key = SimpleNamespace(id=uuid4(), id_user=uuid4())
+    monkeypatch.setattr(services, "get_current_user", lambda _token, _db: user)
+
+    class Db:
+        def scalar(self, statement):
+            assert user.id in statement.compile().params.values()
+
+    with pytest.raises(HTTPException) as error:
+        services.delete_user_api_key(
+            "token", str(other_users_key.id), cast(Session, Db())
+        )
+
+    assert error.value.status_code == 404
 
 
 def test_provider_hostname_cannot_resolve_to_internal_network(monkeypatch):
@@ -202,6 +261,53 @@ def test_personal_key_model_lookup_is_always_user_scoped(monkeypatch):
     assert "AND (ai.user_api_key_can_use_ia_model.id =" in sql
 
 
+def test_model_api_keys_are_loaded_in_two_user_scoped_queries():
+    from app.core.db_models.ai_models import AgentModel, AiModel
+    from app.modules.ai_provider.services.ai_compatibility_layer import AiProvider
+
+    owner_id = uuid4()
+    model_ids = [uuid4(), uuid4(), uuid4()]
+    personal_key = object()
+    shared_key = object()
+
+    class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def all(self):
+            return self.rows
+
+    class Db:
+        def __init__(self):
+            self.statements = []
+
+        def execute(self, statement):
+            self.statements.append(statement)
+            if len(self.statements) == 1:
+                return Result([(model_ids[0], personal_key)])
+            return Result([(model_ids[1], shared_key)])
+
+    db = Db()
+    preference_order = [
+        (
+            cast(AiModel, SimpleNamespace(id=model_id)),
+            1.0,
+            cast(AgentModel, object()),
+        )
+        for model_id in model_ids
+    ]
+    personal, shared = AiProvider(cast(Session, db), "token")._load_model_api_keys(
+        owner_id,
+        preference_order,
+    )
+
+    assert len(db.statements) == 2
+    assert personal == {model_ids[0]: [personal_key]}
+    assert shared == {model_ids[1]: [shared_key]}
+    assert owner_id in db.statements[0].compile().params.values()
+    assert "ai.user_api_key.is_active IS true" in str(db.statements[0])
+
+
 def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
     from app.modules.ai_provider.services import ai_compatibility_layer
 
@@ -270,14 +376,10 @@ def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
     )
     monkeypatch.setattr(
         ai_compatibility_layer.AiProvider,
-        "_get_api_keys",
-        lambda _self, model: [personal_key] if model is model_with_key else [],
-    )
-    monkeypatch.setattr(
-        ai_compatibility_layer.AiProvider,
-        "_get_shared_api_keys",
-        lambda _self, model: (
-            [shared_key] if model is model_with_shared_key else []
+        "_load_model_api_keys",
+        lambda _self, _owner_id, _preference_order: (
+            {model_with_key.id: [personal_key]},
+            {model_with_shared_key.id: [shared_key]},
         ),
     )
     monkeypatch.setattr(
@@ -302,7 +404,7 @@ def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
         _self, model, _api_keys, _provider, _system_prompt, _temperature,
         _user_prompt, _response_model,
     ):
-        assert db.commits >= 4
+        assert db.commits >= 2
         invoked_models.append(model)
         invoked_keys.append(_api_keys)
         invoked_prompts.append(_system_prompt)
@@ -331,6 +433,143 @@ def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
     assert all("Respond in Portuguese." in prompt for prompt in invoked_prompts)
 
 
+def test_ai_generation_fails_fast_without_any_active_api_keys(monkeypatch):
+    from app.modules.ai_provider.services import ai_compatibility_layer
+
+    user_id = uuid4()
+    agent_id = uuid4()
+    model = SimpleNamespace(
+        id=uuid4(), display_name="No key", id_ai_provider=uuid4()
+    )
+    agent = SimpleNamespace(id=agent_id)
+    context = (
+        user_id,
+        agent,
+        object(),
+        [(model, 1.0, object())],
+        None,
+        {},
+        {},
+    )
+    provider = ai_compatibility_layer.AiProvider(cast(Session, object()), "token")
+    monkeypatch.setattr(
+        provider, "_prepare_call_context", lambda *_args: context
+    )
+    invoked = False
+
+    async def invoke_model(*_args):
+        nonlocal invoked
+        invoked = True
+
+    monkeypatch.setattr(provider, "_invoke_model", invoke_model)
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(provider.call_ai("prompt", agent_id))
+
+    assert error.value.status_code == 422
+    assert "No active API keys" in error.value.detail
+    assert not invoked
+
+
+def test_ai_generation_keeps_fallback_available_after_a_model_timeout(monkeypatch):
+    from app.modules.ai_provider.services import ai_compatibility_layer
+
+    user_id = uuid4()
+    agent_id = uuid4()
+    slow_model = SimpleNamespace(
+        id=uuid4(), display_name="Slow model", id_ai_provider=uuid4()
+    )
+    fallback_model = SimpleNamespace(
+        id=uuid4(), display_name="Fallback model", id_ai_provider=uuid4()
+    )
+    slow_key = object()
+    fallback_key = object()
+    context = (
+        user_id,
+        SimpleNamespace(id=agent_id),
+        object(),
+        [
+            (slow_model, 2.0, object()),
+            (fallback_model, 1.0, object()),
+        ],
+        None,
+        {
+            slow_model.id: [slow_key],
+            fallback_model.id: [fallback_key],
+        },
+        {},
+    )
+    provider = ai_compatibility_layer.AiProvider(cast(Session, object()), "token")
+    monkeypatch.setattr(provider, "_prepare_call_context", lambda *_args: context)
+    monkeypatch.setattr(
+        provider,
+        "_prepare_model_attempt",
+        lambda _model, _agent, _agent_model, _owner_id, api_keys: (
+            api_keys,
+            SimpleNamespace(is_active=True),
+            "system",
+            0.3,
+        ),
+    )
+    attempted_models = []
+
+    async def invoke_model(model, *_args):
+        attempted_models.append(model)
+        if model is slow_model:
+            raise TimeoutError("The first model timed out.")
+        return "successful response", object()
+
+    monkeypatch.setattr(provider, "_invoke_model", invoke_model)
+    monkeypatch.setattr(provider, "_record_usage", lambda *_args: None)
+
+    result = asyncio.run(provider.call_ai("prompt", agent_id))
+
+    assert result == "successful response"
+    assert attempted_models == [slow_model, fallback_model]
+
+
+def test_ai_generation_returns_504_after_all_models_time_out(monkeypatch):
+    from app.modules.ai_provider.services import ai_compatibility_layer
+
+    user_id = uuid4()
+    agent_id = uuid4()
+    model = SimpleNamespace(
+        id=uuid4(), display_name="Timed out model", id_ai_provider=uuid4()
+    )
+    context = (
+        user_id,
+        SimpleNamespace(id=agent_id),
+        object(),
+        [(model, 1.0, object())],
+        None,
+        {model.id: [object()]},
+        {},
+    )
+    provider = ai_compatibility_layer.AiProvider(cast(Session, object()), "token")
+    monkeypatch.setattr(provider, "_prepare_call_context", lambda *_args: context)
+    monkeypatch.setattr(
+        provider,
+        "_prepare_model_attempt",
+        lambda _model, _agent, _agent_model, _owner_id, api_keys: (
+            api_keys,
+            SimpleNamespace(is_active=True),
+            "system",
+            0.3,
+        ),
+    )
+
+    async def invoke_model(*_args):
+        raise TimeoutError("The model call timed out.")
+
+    monkeypatch.setattr(provider, "_invoke_model", invoke_model)
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(provider.call_ai("prompt", agent_id))
+
+    assert error.value.status_code == 504
+    assert "timed out" in error.value.detail.lower()
+
+
 @pytest.mark.parametrize(
     (
         "model_slug",
@@ -346,7 +585,7 @@ def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
             "groq",
             "groq",
             "json_mode",
-            {"max_retries": 0, "timeout": 240},
+            {"max_retries": 0, "timeout": 270},
         ),
     ],
 )
@@ -358,8 +597,8 @@ def test_invalid_structured_response_is_retried_and_validated(
     expected_method,
     expected_client_options,
 ):
-    from app.modules.ai_provider.services import ai_compatibility_layer
     from app.modules.ai_provider.models import CreateFlashcard
+    from app.modules.ai_provider.services import ai_compatibility_layer
 
     prompts = []
     system_prompts = []
@@ -451,6 +690,143 @@ def test_invalid_structured_response_is_retried_and_validated(
     assert "not valid JSON" in prompts[1]
 
 
+def test_langchain_import_does_not_block_the_event_loop(monkeypatch):
+    import time
+
+    from app.core.db_models.ai_models import AiModel, UserApiKey
+    from app.modules.ai_provider.models import CreateFlashcard
+    from app.modules.ai_provider.services import ai_compatibility_layer
+
+    class Chain:
+        async def ainvoke(self, _values):
+            return {
+                "parsed": {"title": "Title", "statement": "Statement"},
+                "raw": object(),
+            }
+
+    class Prompt:
+        def __or__(self, _structured_model):
+            return Chain()
+
+    class PromptTemplate:
+        @staticmethod
+        def from_messages(_messages):
+            return Prompt()
+
+    class ChatModel:
+        def with_structured_output(self, *_args, **_kwargs):
+            return object()
+
+    def init_chat_model(*_args, **_kwargs):
+        return ChatModel()
+
+    def slow_import():
+        time.sleep(0.1)
+        return init_chat_model, PromptTemplate
+
+    monkeypatch.setattr(ai_compatibility_layer, "_import_langchain", slow_import)
+    monkeypatch.setattr(ai_compatibility_layer, "decrypt", lambda _key: "api-key")
+    provider = ai_compatibility_layer.AiProvider(cast(Session, object()), "token")
+
+    async def verify_responsiveness():
+        generation = asyncio.create_task(
+            provider._invoke_model(
+                model=cast(
+                    AiModel,
+                    SimpleNamespace(slug="test-model", display_name="Test model"),
+                ),
+                api_keys=[
+                    cast(UserApiKey, SimpleNamespace(encrypted_key="encrypted"))
+                ],
+                provider=SimpleNamespace(protocol="native", slug="openai"),
+                system_prompt="Return a flashcard.",
+                temperature=0.3,
+                user_prompt="Create one flashcard.",
+                response_model=CreateFlashcard,
+            )
+        )
+        await asyncio.sleep(0.01)
+        assert not generation.done()
+        parsed, _raw = await generation
+        assert parsed == CreateFlashcard(title="Title", statement="Statement")
+
+    asyncio.run(verify_responsiveness())
+
+
+def test_model_timeout_still_allows_the_next_api_key_to_succeed(monkeypatch):
+    from app.core.db_models.ai_models import AiModel, UserApiKey
+    from app.modules.ai_provider.models import CreateFlashcard
+    from app.modules.ai_provider.services import ai_compatibility_layer
+
+    attempted_keys = []
+
+    class Chain:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        async def ainvoke(self, _values):
+            if self.api_key == "slow-key":
+                await asyncio.sleep(0.05)
+            return {
+                "parsed": {"title": "Title", "statement": "Statement"},
+                "raw": object(),
+            }
+
+    class Prompt:
+        def __or__(self, structured_model):
+            return Chain(structured_model.api_key)
+
+    class PromptTemplate:
+        @staticmethod
+        def from_messages(_messages):
+            return Prompt()
+
+    class ChatModel:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def with_structured_output(self, *_args, **_kwargs):
+            return SimpleNamespace(api_key=self.api_key)
+
+    def init_chat_model(*_args, api_key, **_kwargs):
+        attempted_keys.append(api_key)
+        return ChatModel(api_key)
+
+    monkeypatch.setattr(
+        ai_compatibility_layer,
+        "_import_langchain",
+        lambda: (init_chat_model, PromptTemplate),
+    )
+    monkeypatch.setattr(
+        ai_compatibility_layer,
+        "AI_MODEL_REQUEST_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(ai_compatibility_layer, "decrypt", lambda key: key)
+    provider = ai_compatibility_layer.AiProvider(cast(Session, object()), "token")
+
+    result, _raw = asyncio.run(
+        provider._invoke_model(
+            model=cast(
+                AiModel,
+                SimpleNamespace(slug="test-model", display_name="Test model"),
+            ),
+            api_keys=[
+                cast(UserApiKey, SimpleNamespace(encrypted_key="slow-key")),
+                cast(UserApiKey, SimpleNamespace(encrypted_key="fast-key")),
+            ],
+            provider=SimpleNamespace(protocol="native", slug="openai"),
+            system_prompt="Return a flashcard.",
+            temperature=0.3,
+            user_prompt="Create one flashcard.",
+            response_model=CreateFlashcard,
+        )
+    )
+
+    assert result == CreateFlashcard(title="Title", statement="Statement")
+    assert attempted_keys == ["slow-key", "fast-key"]
+
+
 def test_malformed_tool_error_does_not_expose_generated_arguments():
     from app.modules.ai_provider.services.ai_compatibility_layer import (
         _format_provider_error,
@@ -469,14 +845,11 @@ def test_malformed_tool_error_does_not_expose_generated_arguments():
 def test_ai_generation_timeout_returns_gateway_timeout(monkeypatch):
     from app.modules.ai_provider import router
 
-    class HungProvider:
+    class TimedOutProvider:
         async def call_ai(self, **_kwargs):
-            await asyncio.sleep(1)
+            raise TimeoutError("The model call timed out.")
 
-    monkeypatch.setattr(
-        router, "AiProvider", lambda **_kwargs: HungProvider()
-    )
-    monkeypatch.setattr(router, "AI_GENERATION_TIMEOUT_SECONDS", 0.001)
+    monkeypatch.setattr(router, "AiProvider", lambda **_kwargs: TimedOutProvider())
 
     with pytest.raises(HTTPException) as error:
         asyncio.run(
@@ -493,13 +866,14 @@ def test_ai_generation_timeout_returns_gateway_timeout(monkeypatch):
     assert "timed out" in error.value.detail.lower()
 
 
-def test_ai_generation_timeout_is_four_minutes():
-    from app.modules.ai_provider import router
+def test_ai_generation_timeout_layers_allow_the_model_deadline_to_unwind():
     from app.modules.ai_provider.services import ai_compatibility_layer
 
-    assert router.AI_GENERATION_TIMEOUT_SECONDS == 240
     assert ai_compatibility_layer.AI_MODEL_REQUEST_TIMEOUT_SECONDS == 240
-    assert ai_compatibility_layer.AI_MODEL_HTTP_TIMEOUT_SECONDS == 240
+    assert (
+        ai_compatibility_layer.AI_MODEL_HTTP_TIMEOUT_SECONDS
+        > ai_compatibility_layer.AI_MODEL_REQUEST_TIMEOUT_SECONDS
+    )
 
 
 def test_ai_generation_database_work_does_not_block_event_loop(monkeypatch):
@@ -512,7 +886,7 @@ def test_ai_generation_database_work_does_not_block_event_loop(monkeypatch):
         import time
 
         time.sleep(0.1)
-        return uuid4(), object(), CreateFlashcard, [], None
+        return uuid4(), object(), CreateFlashcard, [], None, {}, {}
 
     monkeypatch.setattr(provider, "_prepare_call_context", slow_prepare)
 
@@ -529,8 +903,8 @@ def test_ai_generation_database_work_does_not_block_event_loop(monkeypatch):
 
 
 def test_structured_response_still_rejects_missing_required_fields():
-    from app.modules.ai_provider.services.ai_compatibility_layer import AiProvider
     from app.modules.ai_provider.models import CreateFlashcard
+    from app.modules.ai_provider.services.ai_compatibility_layer import AiProvider
 
     with pytest.raises(ValueError, match="does not match CreateFlashcard"):
         AiProvider(object(), "token")._parse_model_result(

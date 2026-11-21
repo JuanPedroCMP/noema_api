@@ -1,30 +1,38 @@
 import asyncio
 import logging
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import TypeAdapter
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
-from app.modules.ai_provider.models import ExternalResourcesOut, GbBook, S2SearchResult, SearchQueries, TavilyResponse, YtSearchResult
+
+from app.modules.ai_provider.models import (
+    ExternalResourcesOut,
+    GbBook,
+    S2SearchResult,
+    SearchQueries,
+    TavilyResponse,
+    YtSearchResult,
+)
 from app.modules.ai_provider.services.services import (
     get_books,
     get_papers,
     get_search_results,
     get_videos,
 )
-from .services.ai_compatibility_layer import AiProvider
-from ...core.db_models.user_config_models import Language
-from sqlalchemy.orm import Session
+
 from ...core.database import get_db
+from ...core.db_models.user_config_models import Language
 from ...core.security import oauth2_scheme
-from uuid import UUID
-from pydantic import TypeAdapter
+from .services.ai_compatibility_layer import AiProvider
 
 router = APIRouter(
     prefix="/ai_router",
     tags=["ai_router"]
 )
 logger = logging.getLogger(__name__)
-AI_GENERATION_TIMEOUT_SECONDS = 240
 
 
 def _resolve_response_language(
@@ -66,13 +74,10 @@ async def use_ai(
     ai_provider = AiProvider(db=db, user_token=token)
     logger.info("Starting AI generation for agent %s.", agent_id)
     try:
-        result = await asyncio.wait_for(
-            ai_provider.call_ai(
-                agent_id=agent_id,
-                user_prompt=user_prompt,
-                response_language=language,
-            ),
-            timeout=AI_GENERATION_TIMEOUT_SECONDS,
+        result = await ai_provider.call_ai(
+            agent_id=agent_id,
+            user_prompt=user_prompt,
+            response_language=language,
         )
     except asyncio.TimeoutError as exc:
         logger.error("AI generation timed out for agent %s.", agent_id)
@@ -105,13 +110,10 @@ async def get_materials(
     )
     ai_provider = AiProvider(db=db, user_token=token)
     try:
-        result: SearchQueries = await asyncio.wait_for(
-            ai_provider.call_ai(
-                agent_id=agent_id,
-                user_prompt=user_prompt,
-                response_language=language,
-            ),
-            timeout=AI_GENERATION_TIMEOUT_SECONDS,
+        result: SearchQueries = await ai_provider.call_ai(
+            agent_id=agent_id,
+            user_prompt=user_prompt,
+            response_language=language,
         )
     except asyncio.TimeoutError as exc:
         logger.error("Resource recommendation timed out for agent %s.", agent_id)

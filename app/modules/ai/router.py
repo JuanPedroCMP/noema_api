@@ -116,7 +116,12 @@ def update_user_api_key(identificator: str, ai_model_data: UserApiKeyUpdate, db:
     upd_data = uuak(token, identificator, ai_model_data, db)
     return upd_data
 
-@user_api_key_router.delete("/delete/{identificator}")
+@user_api_key_router.delete(
+    "/delete/{identificator}",
+    description=(
+        "Permanently deletes the authenticated user's API key and its model links."
+    ),
+)
 def delete_user_api_key(identificator: str, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     sucess = duak(token, identificator, db)
     return sucess

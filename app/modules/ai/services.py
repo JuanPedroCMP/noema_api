@@ -1,12 +1,42 @@
-from ...core.db_models.ai_models import AiProvider, AiModel, UserApiKey, SharedApiKey, Agent, AgentModel, UserApiKeyCanUseIaModel, AiUsageLog
-from ...core.security import decrypt, get_current_user, encrypt
-from sqlalchemy.orm import Session
-from sqlalchemy import select, or_, and_
-from fastapi import HTTPException, status
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
-from .models import ProviderCreate, ProviderUpdate, AiModelCreate, AiModelUpdate, UserApiKeyCreate, UserApiKeyUpdate, SharedApiKeyCreate, SharedApiKeyUpdate, AgentCreate, AgentUpdate, AgentFilters, AgentModelCreate, AgentModelUpdate, AgentModelFilters, UserApiKeyCanUseIaModelCreate, AiUsageLogFilters, AiUsageLogCreate
-from datetime import datetime
+
+from fastapi import HTTPException, status
+from sqlalchemy import and_, delete, or_, select
+from sqlalchemy.orm import Session
+
+from ...core.db_models.ai_models import (
+    Agent,
+    AgentModel,
+    AiModel,
+    AiProvider,
+    AiUsageLog,
+    SharedApiKey,
+    UserApiKey,
+    UserApiKeyCanUseIaModel,
+)
+from ...core.security import decrypt, encrypt, get_current_user
+from .models import (
+    AgentCreate,
+    AgentFilters,
+    AgentModelCreate,
+    AgentModelFilters,
+    AgentModelUpdate,
+    AgentUpdate,
+    AiModelCreate,
+    AiModelUpdate,
+    AiUsageLogCreate,
+    AiUsageLogFilters,
+    ProviderCreate,
+    ProviderUpdate,
+    SharedApiKeyCreate,
+    SharedApiKeyUpdate,
+    UserApiKeyCanUseIaModelCreate,
+    UserApiKeyCreate,
+    UserApiKeyUpdate,
+)
+
 
 ################
 ### Provider
@@ -287,8 +317,12 @@ def update_user_api_key(token: str, identificator: str, upd_data: UserApiKeyUpda
 
 def delete_user_api_key(token: str, identificator: str, db: Session) -> bool:
     del_api_key = get_user_api_key(token, identificator, db)
-    del_api_key.is_active = False
-    del_api_key.updated_at = datetime.now()
+    db.execute(
+        delete(UserApiKeyCanUseIaModel).where(
+            UserApiKeyCanUseIaModel.id_user_api_key == del_api_key.id
+        )
+    )
+    db.delete(del_api_key)
     db.commit()
     return True
 
