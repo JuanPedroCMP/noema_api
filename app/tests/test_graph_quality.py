@@ -19,6 +19,29 @@ def test_quality_checker_accepts_a_valid_graph_fixture():
     assert graph_quality_problems(_graph()) == []
 
 
+def test_quality_checker_rejects_empty_graph_and_missing_leaf_objectives():
+    graph = _graph()
+    graph["nodes"] = []
+    assert "graph must contain at least one node" in graph_quality_problems(graph)
+
+    graph = _graph()
+    graph["graph_title"] = " "
+    assert "graph must have a non-empty title" in graph_quality_problems(graph)
+
+    graph = _graph()
+    del graph["nodes"][2]["description"]
+    assert "missing learning objective: 3" in graph_quality_problems(graph)
+
+
+def test_quality_checker_rejects_repeated_leaf_objectives():
+    graph = _graph()
+    graph["nodes"][3]["description"] = graph["nodes"][2]["description"].upper()
+    assert (
+        "duplicate learning objective: 3, 4"
+        in graph_quality_problems(graph)
+    )
+
+
 def test_quality_checker_treats_legacy_null_weights_as_essential():
     graph = _graph()
     for edge in graph["edges"]:

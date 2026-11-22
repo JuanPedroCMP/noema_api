@@ -3,9 +3,9 @@
 ## Plano
 
 1. **Contrato e criação:** confirmar o uso dos schemas da API; adicionar `plan`,
-   `level` e `weight` somente como campos compatíveis com payloads antigos.
-   Versionar o novo prompt e fornecer SQL de atualização do agente, sem alterar
-   o banco nesta entrega.
+   `level`, `weight` e objetivos concisos por folha como campos opcionais
+   compatíveis com payloads antigos. Reutilizar `graph_node.description`, sem
+   migração. Versionar o prompt e fornecer SQL de atualização do agente.
 2. **Qualidade na geração:** fazer o app importar pesos antigos como `1.0`,
    reparar defeitos determinísticos e devolver esses reparos como feedback.
    Validar também a árvore de contenção, níveis de aprendizagem e caminhos a

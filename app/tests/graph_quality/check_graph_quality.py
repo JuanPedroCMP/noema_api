@@ -33,6 +33,10 @@ def _normalized_title(value: Any) -> str:
     return "".join(character for character in normalized if character.isalnum())
 
 
+def _normalized_objective(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
 def _has_path(
     source: Any,
     target: Any,
@@ -61,6 +65,11 @@ def graph_quality_problems(graph: dict[str, Any]) -> list[str]:
         return ["graph must contain nodes and edges lists"]
 
     problems: list[str] = []
+    if not nodes:
+        problems.append("graph must contain at least one node")
+    if not isinstance(graph.get("graph_title"), str) or not graph["graph_title"].strip():
+        problems.append("graph must have a non-empty title")
+
     nodes_by_id: dict[Any, dict[str, Any]] = {}
     for node in nodes:
         if not isinstance(node, dict):
@@ -171,9 +180,21 @@ def graph_quality_problems(graph: dict[str, Any]) -> list[str]:
         if node_type in CONTAINER_TYPES and not children_by_parent.get(node_id):
             problems.append(f"empty container: {node_id}")
     leaves = [node_id for node_id in nodes_by_id if node_id not in containers]
+    objectives: dict[str, Any] = {}
 
     for node_id in leaves:
         node = nodes_by_id[node_id]
+        description = node.get("description")
+        if not isinstance(description, str) or not description.strip():
+            problems.append(f"missing learning objective: {node_id}")
+        else:
+            objective = _normalized_objective(description)
+            if objective in objectives:
+                problems.append(
+                    f"duplicate learning objective: {objectives[objective]}, {node_id}"
+                )
+            else:
+                objectives[objective] = node_id
         level = str(node.get("level", "core")).lower()
         incoming = incoming_prerequisites.get(node_id, [])
         if level == "foundation" and incoming:

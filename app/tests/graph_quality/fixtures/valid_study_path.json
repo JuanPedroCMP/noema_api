@@ -3,9 +3,9 @@
   "nodes": [
     {"node_id": 1, "title": "Matemática", "type": "AREA"},
     {"node_id": 2, "title": "Álgebra", "type": "TOPIC"},
-    {"node_id": 3, "title": "Aritmética", "type": "CONCEPT", "level": "foundation"},
-    {"node_id": 4, "title": "Equações lineares", "type": "CONCEPT", "level": "core"},
-    {"node_id": 5, "title": "Sistemas lineares", "type": "SUBCONCEPT", "level": "advanced"}
+    {"node_id": 3, "title": "Aritmética", "description": "Resolver operações com números reais necessárias para manipular equações.", "type": "CONCEPT", "level": "foundation"},
+    {"node_id": 4, "title": "Equações lineares", "description": "Resolver equações lineares de uma variável e justificar cada transformação.", "type": "CONCEPT", "level": "core"},
+    {"node_id": 5, "title": "Sistemas lineares", "description": "Resolver sistemas lineares e interpretar suas soluções.", "type": "SUBCONCEPT", "level": "advanced"}
   ],
   "edges": [
     {"source_node": 1, "target_node": 2, "type": "SUBTOPIC"},

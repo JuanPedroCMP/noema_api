@@ -28,6 +28,7 @@ def test_graph_creation_contract_adds_optional_defaults_without_breaking_legacy(
 
     assert response.plan == ""
     assert response.nodes[0].level == "core"
+    assert response.nodes[0].description == ""
     assert response.edges[0].weight == 1.0
     assert AiProvider._get_response_model("manipulate_graph") is ManipulateGraphResponse
     assert AiProvider._get_response_model("manipulate_node") is ManipulateNodeResponse
@@ -36,6 +37,9 @@ def test_graph_creation_contract_adds_optional_defaults_without_breaking_legacy(
     assert "not persisted" in schema["$defs"]["GraphNode"]["properties"]["level"][
         "description"
     ]
+    assert "learning objective" in schema["$defs"]["GraphNode"]["properties"][
+        "description"
+    ]["description"]
     assert (
         "containment"
         in schema["$defs"]["GraphEdge"]["properties"]["type"]["description"]
@@ -46,9 +50,10 @@ def test_graph_creation_contract_validates_level_and_edge_weight():
     assert GraphNode(
         node_id=1,
         title="Fundamentos",
+        description="Resolver operações com números reais.",
         type=GraphType.CONCEPT,
         level="foundation",
-    ).level == "foundation"
+    ).description == "Resolver operações com números reais."
     assert GraphEdge(
         source_node=1,
         target_node=2,

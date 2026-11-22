@@ -46,6 +46,11 @@ class ManipulateGraphResponse(BaseModel):
 class GraphNode(BaseModel):
     node_id: int = Field(description="Unique graph-local node identifier.")
     title: str = Field(description="Human-readable name of the node.")
+    description: str = Field(
+        default="",
+        description="Concise learning objective for a leaf, describing an "
+        "observable outcome; a short scope summary for a container.",
+    )
     type: GraphType = Field(
         description="Structural node category: AREA, TOPIC, CONCEPT, or SUBCONCEPT.",
     )
