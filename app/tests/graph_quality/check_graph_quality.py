@@ -3,13 +3,55 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
-import re
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Any
 
 CONTAINER_TYPES = {"AREA", "TOPIC"}
 EDGE_TYPES = {"PREREQUISITE", "SUBTOPIC"}
+NODE_TYPES = {"AREA", "TOPIC", "CONCEPT", "SUBCONCEPT"}
+NODE_TYPES_ORDER = {"AREA": 0, "TOPIC": 1, "CONCEPT": 2, "SUBCONCEPT": 3}
+LEVEL_ORDER = {"foundation": 0, "core": 1, "advanced": 2}
+
+
+def _normalize_node_id(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _normalized_title(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value)).casefold()
+    return "".join(character for character in normalized if character.isalnum())
+
+
+def _has_path(
+    source: Any,
+    target: Any,
+    edges: list[tuple[Any, Any]],
+) -> bool:
+    adjacency: dict[Any, list[Any]] = {}
+    for edge_source, edge_target in edges:
+        adjacency.setdefault(edge_source, []).append(edge_target)
+    pending = [source]
+    visited = {source}
+    while pending:
+        current = pending.pop()
+        for next_node in adjacency.get(current, []):
+            if next_node == target:
+                return True
+            if next_node not in visited:
+                visited.add(next_node)
+                pending.append(next_node)
+    return False
 
 
 def graph_quality_problems(graph: dict[str, Any]) -> list[str]:
@@ -24,71 +66,118 @@ def graph_quality_problems(graph: dict[str, Any]) -> list[str]:
         if not isinstance(node, dict):
             problems.append("node entry must be an object")
             continue
-        node_id = node.get("node_id")
+        node_id = _normalize_node_id(node.get("node_id"))
+        if node_id is None:
+            problems.append(f"invalid node id: {node.get('node_id')}")
+            continue
         if node_id in nodes_by_id:
             problems.append(f"duplicate node id: {node_id}")
         nodes_by_id[node_id] = node
+        if str(node.get("type", "")).upper() not in NODE_TYPES:
+            problems.append(f"invalid node type: {node_id}")
+        if str(node.get("level", "core")).lower() not in LEVEL_ORDER:
+            problems.append(f"invalid learning level: {node_id}")
+        if not isinstance(node.get("title"), str) or not node["title"].strip():
+            problems.append(f"empty node title: {node_id}")
 
     containers = {
         node_id
         for node_id, node in nodes_by_id.items()
         if str(node.get("type", "")).upper() in CONTAINER_TYPES
     }
-    prerequisite_edges: list[tuple[Any, Any]] = []
-    hierarchy_parent_ids = {
-        edge.get("source_node")
+    containers.update(
+        _normalize_node_id(edge.get("source_node"))
         for edge in edges
         if isinstance(edge, dict)
         and str(edge.get("type", "")).upper() == "SUBTOPIC"
-    }
-    containers.update(hierarchy_parent_ids)
-    prerequisite_pairs: set[tuple[Any, Any]] = set()
+        and _normalize_node_id(edge.get("source_node")) is not None
+    )
+    prerequisite_edges: list[tuple[Any, Any]] = []
+    essential_prerequisite_edges: list[tuple[Any, Any]] = []
+    subtopic_edges: list[tuple[Any, Any]] = []
+    edge_pairs: set[tuple[Any, Any]] = set()
     incoming_prerequisites: dict[Any, list[Any]] = {}
     essential_incoming: dict[Any, list[Any]] = {}
+    parents_by_child: dict[Any, set[Any]] = {}
+    children_by_parent: dict[Any, list[Any]] = {}
 
     for edge in edges:
         if not isinstance(edge, dict):
             problems.append("edge entry must be an object")
             continue
         edge_type = str(edge.get("type", "")).upper()
-        source = edge.get("source_node")
-        target = edge.get("target_node")
+        source = _normalize_node_id(edge.get("source_node"))
+        target = _normalize_node_id(edge.get("target_node"))
         if edge_type not in EDGE_TYPES:
+            problems.append(f"invalid edge type: {edge_type or '<empty>'}")
+            continue
+        if source is None or target is None:
+            problems.append(f"invalid edge endpoints: {source}->{target}")
             continue
         pair = (source, target)
-        if pair in prerequisite_pairs:
+        if pair in edge_pairs:
             problems.append(f"duplicate edge: {source}->{target}")
-        prerequisite_pairs.add(pair)
+        edge_pairs.add(pair)
         if source == target:
             problems.append(f"self-loop: {source}")
         if source not in nodes_by_id or target not in nodes_by_id:
             problems.append(f"dangling edge: {source}->{target}")
+            continue
+        weight = edge.get("weight", 1.0)
+        weight = 1.0 if weight is None else weight
+        invalid_weight = (
+            not isinstance(weight, (int, float))
+            or isinstance(weight, bool)
+            or not 0 <= weight <= 1
+        )
+        if invalid_weight:
+            problems.append(f"invalid edge weight: {source}->{target}")
         if edge_type != "PREREQUISITE":
+            subtopic_edges.append(pair)
+            parents_by_child.setdefault(target, set()).add(source)
+            children_by_parent.setdefault(source, []).append(target)
+            parent_type = str(nodes_by_id[source].get("type", "")).upper()
+            child_type = str(nodes_by_id[target].get("type", "")).upper()
+            if (
+                parent_type in NODE_TYPES
+                and child_type in NODE_TYPES
+                and NODE_TYPES_ORDER[parent_type] >= NODE_TYPES_ORDER[child_type]
+            ):
+                problems.append(f"invalid hierarchy order: {source}->{target}")
             continue
         if source in containers or target in containers:
             problems.append(f"prerequisite touches a container: {source}->{target}")
         prerequisite_edges.append((source, target))
         incoming_prerequisites.setdefault(target, []).append(source)
-        if (edge.get("weight") if edge.get("weight") is not None else 1.0) >= 0.7:
+        if not invalid_weight and weight >= 0.7:
             essential_incoming.setdefault(target, []).append(source)
-
-    children_by_parent: dict[Any, list[Any]] = {}
-    for edge in edges:
+            essential_prerequisite_edges.append(pair)
+        source_level = str(nodes_by_id[source].get("level", "core")).lower()
+        target_level = str(nodes_by_id[target].get("level", "core")).lower()
         if (
-            isinstance(edge, dict)
-            and str(edge.get("type", "")).upper() == "SUBTOPIC"
-            and edge.get("source_node") in nodes_by_id
-            and edge.get("target_node") in nodes_by_id
+            source_level in LEVEL_ORDER
+            and target_level in LEVEL_ORDER
+            and LEVEL_ORDER[source_level] > LEVEL_ORDER[target_level]
         ):
-            children_by_parent.setdefault(edge["source_node"], []).append(
-                edge["target_node"]
-            )
+            problems.append(f"prerequisite level regression: {source}->{target}")
+
+    for node_id, node in nodes_by_id.items():
+        parent_count = len(parents_by_child.get(node_id, set()))
+        node_type = str(node.get("type", "")).upper()
+        if (node_type == "AREA" and parent_count > 1) or (
+            node_type != "AREA" and parent_count != 1
+        ):
+            problems.append(f"invalid hierarchy parent count: {node_id}")
+        if node_type in CONTAINER_TYPES and not children_by_parent.get(node_id):
+            problems.append(f"empty container: {node_id}")
     leaves = [node_id for node_id in nodes_by_id if node_id not in containers]
 
     for node_id in leaves:
         node = nodes_by_id[node_id]
         level = str(node.get("level", "core")).lower()
         incoming = incoming_prerequisites.get(node_id, [])
+        if level == "foundation" and incoming:
+            problems.append(f"foundation has prerequisite: {node_id}")
         if level != "foundation" and not incoming:
             problems.append(f"non-foundation leaf has no prerequisite: {node_id}")
         if not essential_incoming.get(node_id) and level != "foundation":
@@ -96,38 +185,38 @@ def graph_quality_problems(graph: dict[str, Any]) -> list[str]:
 
     def contains_cycle(edges_to_check: list[tuple[Any, Any]]) -> bool:
         adjacency: dict[Any, list[Any]] = {}
+        indegree: dict[Any, int] = {}
         for source, target in edges_to_check:
             adjacency.setdefault(source, []).append(target)
-        visiting: set[Any] = set()
-        visited: set[Any] = set()
-
-        def has_cycle(node_id: Any) -> bool:
-            if node_id in visiting:
-                return True
-            if node_id in visited:
-                return False
-            visiting.add(node_id)
-            if any(has_cycle(target) for target in adjacency.get(node_id, [])):
-                return True
-            visiting.remove(node_id)
-            visited.add(node_id)
-            return False
-
-        return any(has_cycle(node_id) for node_id in adjacency)
+            indegree.setdefault(source, 0)
+            indegree[target] = indegree.get(target, 0) + 1
+        pending = [
+            node_id for node_id, degree in indegree.items() if degree == 0
+        ]
+        visited_count = 0
+        while pending:
+            source = pending.pop()
+            visited_count += 1
+            for target in adjacency.get(source, []):
+                indegree[target] -= 1
+                if indegree[target] == 0:
+                    pending.append(target)
+        return visited_count != len(indegree)
 
     if contains_cycle(prerequisite_edges):
         problems.append("prerequisite cycle")
 
-    subtopic_edges = [
-        (edge["source_node"], edge["target_node"])
-        for edge in edges
-        if isinstance(edge, dict)
-        and str(edge.get("type", "")).upper() == "SUBTOPIC"
-        and edge.get("source_node") in nodes_by_id
-        and edge.get("target_node") in nodes_by_id
-    ]
     if contains_cycle(subtopic_edges):
         problems.append("SUBTOPIC cycle")
+
+    for source, target in prerequisite_edges:
+        remaining_essential_edges = [
+            edge
+            for edge in essential_prerequisite_edges
+            if edge != (source, target)
+        ]
+        if _has_path(source, target, remaining_essential_edges):
+            problems.append(f"transitive prerequisite: {source}->{target}")
 
     foundation_ids = {
         node_id
@@ -148,7 +237,7 @@ def graph_quality_problems(graph: dict[str, Any]) -> list[str]:
             problems.append(f"leaf has no path from foundation: {node_id}")
 
     titled_nodes = [
-        (node_id, re.sub(r"[^a-z0-9]+", "", str(node.get("title", "")).lower()))
+        (node_id, _normalized_title(node.get("title", "")))
         for node_id, node in nodes_by_id.items()
     ]
     for index, (first_id, first_title) in enumerate(titled_nodes):
