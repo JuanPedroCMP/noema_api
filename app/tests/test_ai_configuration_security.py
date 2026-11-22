@@ -900,7 +900,7 @@ def test_model_timeout_still_allows_the_next_api_key_to_succeed(monkeypatch):
 
         async def ainvoke(self, _values):
             if self.api_key == "slow-key":
-                await asyncio.sleep(0.075)
+                await asyncio.sleep(0.15)
             return {
                 "parsed": {"title": "Title", "statement": "Statement"},
                 "raw": object(),
@@ -959,6 +959,79 @@ def test_model_timeout_still_allows_the_next_api_key_to_succeed(monkeypatch):
 
     assert result == CreateFlashcard(title="Title", statement="Statement")
     assert attempted_keys == ["slow-key", "fast-key"]
+
+
+def test_fallback_api_key_keeps_full_model_timeout(monkeypatch):
+    from app.core.db_models.ai_models import AiModel, UserApiKey
+    from app.modules.ai_provider.models import CreateFlashcard
+    from app.modules.ai_provider.services import ai_compatibility_layer
+
+    class Chain:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        async def ainvoke(self, _values):
+            if self.api_key == "unavailable-key":
+                raise RuntimeError("The first key is unavailable.")
+            await asyncio.sleep(0.15)
+            return {
+                "parsed": {"title": "Title", "statement": "Statement"},
+                "raw": object(),
+            }
+
+    class Prompt:
+        def __or__(self, structured_model):
+            return Chain(structured_model.api_key)
+
+    class PromptTemplate:
+        @staticmethod
+        def from_messages(_messages):
+            return Prompt()
+
+    class ChatModel:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def with_structured_output(self, *_args, **_kwargs):
+            return SimpleNamespace(api_key=self.api_key)
+
+    def init_chat_model(*_args, api_key, **_kwargs):
+        return ChatModel(api_key)
+
+    monkeypatch.setattr(
+        ai_compatibility_layer,
+        "_import_langchain",
+        lambda: (init_chat_model, PromptTemplate),
+    )
+    monkeypatch.setattr(
+        ai_compatibility_layer,
+        "AI_MODEL_REQUEST_TIMEOUT_SECONDS",
+        0.2,
+    )
+    monkeypatch.setattr(ai_compatibility_layer, "decrypt", lambda key: key)
+
+    result, _raw = asyncio.run(
+        ai_compatibility_layer.AiProvider(object(), "token")._invoke_model(
+            model=cast(
+                AiModel,
+                SimpleNamespace(slug="test-model", display_name="Test model"),
+            ),
+            api_keys=[
+                cast(
+                    UserApiKey,
+                    SimpleNamespace(encrypted_key="unavailable-key"),
+                ),
+                cast(UserApiKey, SimpleNamespace(encrypted_key="fallback-key")),
+            ],
+            provider=SimpleNamespace(protocol="native", slug="openai"),
+            system_prompt="Return a flashcard.",
+            temperature=0.3,
+            user_prompt="Create one flashcard.",
+            response_model=CreateFlashcard,
+        )
+    )
+
+    assert result == CreateFlashcard(title="Title", statement="Statement")
 
 
 def test_malformed_tool_error_does_not_expose_generated_arguments():

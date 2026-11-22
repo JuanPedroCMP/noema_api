@@ -359,14 +359,11 @@ class AiProvider:
         init_chat_model, chat_prompt_template = await asyncio.to_thread(
             _import_langchain
         )
-        event_loop = asyncio.get_running_loop()
-        key_timeout_seconds = AI_MODEL_REQUEST_TIMEOUT_SECONDS / len(api_keys)
         last_error: Exception | None = None
         attempt_errors: list[Exception] = []
 
         for key_index, api_key in enumerate(api_keys, start=1):
             attempt_started = perf_counter()
-            key_deadline = event_loop.time() + key_timeout_seconds
             try:
                 decrypted_key = decrypt(api_key.encrypted_key)
                 if provider.protocol == "openai_compatible":
@@ -435,7 +432,7 @@ class AiProvider:
                 structured_chain = prompt | structured_model
                 result = await asyncio.wait_for(
                     structured_chain.ainvoke({"user_prompt": user_prompt}),
-                    timeout=max(0, key_deadline - event_loop.time()),
+                    timeout=AI_MODEL_REQUEST_TIMEOUT_SECONDS,
                 )
                 try:
                     parsed, raw_response = self._parse_model_result(
@@ -472,7 +469,7 @@ class AiProvider:
                         structured_chain.ainvoke(
                             {"user_prompt": correction_prompt}
                         ),
-                        timeout=max(0, key_deadline - event_loop.time()),
+                        timeout=AI_MODEL_REQUEST_TIMEOUT_SECONDS,
                     )
                     try:
                         parsed, raw_response = self._parse_model_result(
