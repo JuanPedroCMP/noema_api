@@ -6,6 +6,7 @@ from app.modules.ai_provider.models import (
     GraphEdge,
     GraphNode,
     GraphType,
+    ManipulateGraphPatchResponse,
     ManipulateGraphResponse,
     ManipulateNodeResponse,
 )
@@ -68,4 +69,71 @@ def test_graph_creation_contract_validates_level_and_edge_weight():
             target_node=2,
             type=EdgeType.PREREQUISITE,
             weight=1.1,
+        )
+
+
+def test_graph_task_selects_full_graph_for_create_and_patch_for_edit():
+    assert (
+        AiProvider._get_response_model_for_prompt(
+            ManipulateGraphResponse,
+            "MODE: CREATE\nCreate a learning graph.",
+        )
+        is ManipulateGraphResponse
+    )
+    assert (
+        AiProvider._get_response_model_for_prompt(
+            ManipulateGraphResponse,
+            "MODE: EDIT\nAdd a concept.",
+        )
+        is ManipulateGraphPatchResponse
+    )
+    assert (
+        AiProvider._get_response_model_for_prompt(
+            ManipulateGraphResponse,
+            "Apply this graph change.",
+        )
+        is ManipulateGraphPatchResponse
+    )
+
+
+def test_graph_edit_patch_contract_matches_the_app_payload():
+    patch = ManipulateGraphPatchResponse.model_validate(
+        {
+            "delete_nodes": [1],
+            "rename_nodes": [{"id": 2, "title": "Renamed"}],
+            "add_nodes": [{"id": "new_1", "title": "New concept"}],
+            "delete_edges": [3],
+            "add_edges": [
+                {
+                    "source_node": 2,
+                    "target_node": "new_1",
+                    "type": "PREREQUISITE",
+                    "weight": 0.5,
+                }
+            ],
+        }
+    )
+
+    assert patch.model_dump(mode="json") == {
+        "delete_nodes": [1],
+        "rename_nodes": [{"id": 2, "title": "Renamed"}],
+        "add_nodes": [
+            {"id": "new_1", "title": "New concept", "type": "CONCEPT"}
+        ],
+        "delete_edges": [3],
+        "add_edges": [
+            {
+                "source_node": 2,
+                "target_node": "new_1",
+                "type": "PREREQUISITE",
+                "weight": 0.5,
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        ManipulateGraphPatchResponse.model_validate(
+            {
+                "add_nodes": [{"id": "temporary", "title": "Invalid"}],
+            }
         )

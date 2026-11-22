@@ -51,6 +51,7 @@ from ..models import (
     EvaluateMultipleChoiceQuestionResponse,
     GenerateNodeDescription,
     ManipulateFlashcardGroup,
+    ManipulateGraphPatchResponse,
     ManipulateGraphResponse,
     ManipulateNodeResponse,
     SearchQueries,
@@ -190,6 +191,18 @@ class AiProvider:
                 f"The response model '{class_name}' for task '{task_name}' "
                 "has not been implemented yet."
             )
+        return response_model
+
+    @staticmethod
+    def _get_response_model_for_prompt(
+        response_model: Any,
+        user_prompt: str,
+    ) -> Any:
+        if (
+            response_model is ManipulateGraphResponse
+            and not user_prompt.lstrip().upper().startswith("MODE: CREATE")
+        ):
+            return ManipulateGraphPatchResponse
         return response_model
 
     @staticmethod
@@ -641,6 +654,10 @@ class AiProvider:
             self._prepare_call_context,
             agent_id,
             response_language,
+        )
+        response_model = self._get_response_model_for_prompt(
+            response_model,
+            user_prompt,
         )
         if preference_order and not any(
             personal_keys_by_model.values()

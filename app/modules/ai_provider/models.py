@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Literal, Optional
-
-from pydantic import BaseModel, Json, Field, model_validator
-from uuid import UUID
 from enum import Enum
+from typing import Annotated, Literal, Optional
+from uuid import UUID
+
+from pydantic import BaseModel, Field, Json, StrictInt, model_validator
+
 
 class AiResponseOut(BaseModel):
     id_agent: UUID
@@ -72,6 +73,69 @@ class GraphEdge(BaseModel):
         "but optional. Stored in the existing graph_edge.weight column.",
     )
     
+
+GraphPatchId = Annotated[StrictInt, Field(gt=0)]
+GraphPatchNodeReference = (
+    GraphPatchId
+    | Annotated[str, Field(pattern=r"^new_[1-9]\d*$")]
+)
+
+
+class GraphNodeRename(BaseModel):
+    id: GraphPatchId = Field(description="Existing graph-local node identifier.")
+    title: str = Field(min_length=1, description="Replacement node title.")
+
+
+class GraphNodeAddition(BaseModel):
+    id: str = Field(
+        pattern=r"^new_[1-9]\d*$",
+        description="Temporary identifier in the form new_N.",
+    )
+    title: str = Field(min_length=1, description="Title of the new node.")
+    type: GraphType = Field(
+        default=GraphType.CONCEPT,
+        description="Structural node category of the new node.",
+    )
+
+
+class GraphEdgeAddition(BaseModel):
+    source_node: GraphPatchNodeReference = Field(
+        description="Existing positive node ID or a new_N ID declared in add_nodes."
+    )
+    target_node: GraphPatchNodeReference = Field(
+        description="Existing positive node ID or a new_N ID declared in add_nodes."
+    )
+    type: EdgeType = Field(description="Relation kind for the new edge.")
+    weight: float = Field(
+        default=1.0,
+        ge=0,
+        le=1,
+        description="Importance of a new prerequisite edge; defaults to essential.",
+    )
+
+
+class ManipulateGraphPatchResponse(BaseModel):
+    delete_nodes: list[GraphPatchId] = Field(
+        default_factory=list,
+        description="Existing node identifiers to delete.",
+    )
+    rename_nodes: list[GraphNodeRename] = Field(
+        default_factory=list,
+        description="Existing nodes to rename.",
+    )
+    add_nodes: list[GraphNodeAddition] = Field(
+        default_factory=list,
+        description="New nodes to add using temporary new_N identifiers.",
+    )
+    delete_edges: list[GraphPatchId] = Field(
+        default_factory=list,
+        description="Existing edge identifiers to delete.",
+    )
+    add_edges: list[GraphEdgeAddition] = Field(
+        default_factory=list,
+        description="Edges to add using existing or declared new_N node IDs.",
+    )
+
 
 ##################
 ### EvaluateEssayQuestionResponse
