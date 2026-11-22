@@ -2,6 +2,7 @@ import asyncio
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.modules.ai_provider import router as ai_router
@@ -330,6 +331,37 @@ def test_server_graph_pipeline_runs_plan_create_and_quality_retry():
     assert "missing_coverage_map" in calls[2]["user_prompt"]
     assert result["blueprint"]["outcomes"][1]["prerequisite_ids"] == ["outcome_1"]
     assert result["coverage"][0]["outcome_id"] == "outcome_1"
+
+
+@pytest.mark.parametrize(
+    ("failing_stage", "expected_calls"),
+    [("planning", 1), ("creation", 2)],
+)
+def test_server_graph_pipeline_reports_model_failure_stage(
+    failing_stage,
+    expected_calls,
+):
+    provider = AiProvider(db=None, user_token="test-token")
+    calls = []
+
+    async def call_ai(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == expected_calls:
+            raise RuntimeError("Provider failure details remain server-side.")
+        return _pipeline_blueprint()
+
+    provider.call_ai = call_ai
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            provider.generate_graph_pipeline(
+                user_prompt="MODE: SERVER_CREATE\nLearner request:\nTrain a model.",
+                agent_id=uuid4(),
+            )
+        )
+
+    assert error.value.status_code == 502
+    assert failing_stage in error.value.detail
+    assert "Provider failure details" not in error.value.detail
 
 
 def test_server_graph_audit_rejects_duplicate_coverage_text_and_non_finite_weight():

@@ -811,10 +811,31 @@ class AiProvider:
         if not learner_request:
             raise ValueError("The learner request cannot be empty.")
 
-        plan = await self.call_ai(
-            user_prompt=f"MODE: PLAN\nLearner request:\n{learner_request}",
-            agent_id=agent_id,
-            response_language=response_language,
+        async def call_generation_stage(stage: str, prompt: str) -> Any:
+            try:
+                return await self.call_ai(
+                    user_prompt=prompt,
+                    agent_id=agent_id,
+                    response_language=response_language,
+                )
+            except HTTPException:
+                raise
+            except RuntimeError as exc:
+                logger.exception(
+                    "Graph %s stage failed for agent %s.",
+                    stage,
+                    agent_id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=(
+                        f"Graph {stage} stage failed for all configured AI models."
+                    ),
+                ) from exc
+
+        plan = await call_generation_stage(
+            "planning",
+            f"MODE: PLAN\nLearner request:\n{learner_request}",
         )
         if not isinstance(plan, ManipulateGraphPlanResponse):
             raise HTTPException(
@@ -848,10 +869,9 @@ Represent each planned prerequisite with an essential PREREQUISITE path
 """
         feedback = ""
         for attempt in range(1, GRAPH_CREATION_ATTEMPTS + 1):
-            graph = await self.call_ai(
-                user_prompt=create_prompt + feedback,
-                agent_id=agent_id,
-                response_language=response_language,
+            graph = await call_generation_stage(
+                "creation",
+                create_prompt + feedback,
             )
             if not isinstance(graph, ManipulateGraphResponse):
                 raise HTTPException(
