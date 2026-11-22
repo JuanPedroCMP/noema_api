@@ -26,11 +26,133 @@ class EdgeType(Enum):
     SUBTOPIC = "SUBTOPIC"
     PREREQUISITE = "PREREQUISITE"
 
+
+class GraphCoverageItem(BaseModel):
+    outcome_id: str = Field(
+        default="",
+        description="Transient identifier of the planned outcome this coverage "
+        "item implements; empty only for legacy single-stage graph responses.",
+    )
+    outcome: str = Field(
+        min_length=1,
+        description="A necessary learner outcome within the requested graph scope.",
+    )
+    node_ids: list[StrictInt] = Field(
+        min_length=1,
+        description="Graph-local leaf node identifiers that teach this outcome.",
+    )
+
+
+class GraphBlueprintOutcome(BaseModel):
+    id: str = Field(
+        pattern=r"^outcome_[1-9]\d*$",
+        description="Stable blueprint-local ID in the form outcome_N.",
+    )
+    outcome: str = Field(
+        min_length=1,
+        description="One observable, in-scope learner outcome.",
+    )
+    evidence: str = Field(
+        min_length=1,
+        description="A concise assessment or performance that demonstrates "
+        "the learner achieved this outcome.",
+    )
+    prerequisite_ids: list[str] = Field(
+        default_factory=list,
+        description="Blueprint outcome IDs that are essential prerequisites.",
+    )
+
+
+class ManipulateGraphPlanResponse(BaseModel):
+    scope: str = Field(
+        min_length=1,
+        description="Bounded target performance and scope boundaries for the "
+        "learning graph.",
+    )
+    assumptions: list[str] = Field(
+        default_factory=list,
+        description="Explicitly labeled assumptions that affect graph scope.",
+    )
+    prior_knowledge: list[str] = Field(
+        default_factory=list,
+        description="Prerequisite knowledge explicitly stated by the learner.",
+    )
+    outcomes: list[GraphBlueprintOutcome] = Field(
+        min_length=1,
+        description="Complete set of necessary in-scope outcomes, with evidence "
+        "and prerequisite outcome IDs; this planning response contains no graph.",
+    )
+
+    @model_validator(mode="after")
+    def validate_outcome_dependencies(self) -> ManipulateGraphPlanResponse:
+        if not self.scope.strip():
+            raise ValueError("Blueprint scope must not be blank.")
+        outcomes_by_id = {outcome.id: outcome for outcome in self.outcomes}
+        if len(outcomes_by_id) != len(self.outcomes):
+            raise ValueError("Blueprint outcome IDs must be unique.")
+
+        normalized_outcomes: set[str] = set()
+        for outcome in self.outcomes:
+            if not outcome.outcome.strip() or not outcome.evidence.strip():
+                raise ValueError(
+                    f"Outcome '{outcome.id}' requires outcome text and evidence."
+                )
+            normalized = " ".join(outcome.outcome.casefold().split())
+            if normalized in normalized_outcomes:
+                raise ValueError("Blueprint outcome statements must be unique.")
+            normalized_outcomes.add(normalized)
+            if len(set(outcome.prerequisite_ids)) != len(
+                outcome.prerequisite_ids
+            ):
+                raise ValueError(
+                    f"Outcome '{outcome.id}' repeats a prerequisite ID."
+                )
+            for prerequisite_id in outcome.prerequisite_ids:
+                if prerequisite_id not in outcomes_by_id:
+                    raise ValueError(
+                        f"Outcome '{outcome.id}' references unknown prerequisite "
+                        f"'{prerequisite_id}'."
+                    )
+                if prerequisite_id == outcome.id:
+                    raise ValueError(
+                        f"Outcome '{outcome.id}' cannot depend on itself."
+                    )
+
+        indegree = {outcome_id: 0 for outcome_id in outcomes_by_id}
+        dependents: dict[str, list[str]] = {}
+        for outcome in self.outcomes:
+            for prerequisite_id in outcome.prerequisite_ids:
+                indegree[outcome.id] += 1
+                dependents.setdefault(prerequisite_id, []).append(outcome.id)
+
+        ready = [
+            outcome_id
+            for outcome_id, dependency_count in indegree.items()
+            if dependency_count == 0
+        ]
+        visited_count = 0
+        while ready:
+            outcome_id = ready.pop()
+            visited_count += 1
+            for dependent_id in dependents.get(outcome_id, []):
+                indegree[dependent_id] -= 1
+                if indegree[dependent_id] == 0:
+                    ready.append(dependent_id)
+        if visited_count != len(outcomes_by_id):
+            raise ValueError("Blueprint outcome dependencies contain a cycle.")
+        return self
+
+
 class ManipulateGraphResponse(BaseModel):
     plan: str = Field(
         default="",
-        description="Brief scope and concepts planned for a newly created graph; "
-        "discarded by the app and not persisted.",
+        description="Brief target outcome, scope, assumptions, and starting point "
+        "for a newly created graph; discarded and not persisted.",
+    )
+    coverage: list[GraphCoverageItem] = Field(
+        default_factory=list,
+        description="Coverage ledger mapping every necessary in-scope learner "
+        "outcome to one or more leaf node IDs; transient and not persisted.",
     )
     graph_title: str = Field(description="Human-readable title of the graph.")
   # graph_description:str 
@@ -269,7 +391,7 @@ class CreateFeynmanResponse(BaseModel):
 class CreateMultipleChoiceQuestionResponse(BaseModel):
     title: str
     statement: str
-    choices: list[Choise] = Field(min_length=4)
+    choices: list[Choise] = Field(min_length=4, max_length=4)
 
     @model_validator(mode="before")
     @classmethod

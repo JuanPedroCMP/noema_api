@@ -52,6 +52,7 @@ from ..models import (
     GenerateNodeDescription,
     ManipulateFlashcardGroup,
     ManipulateGraphPatchResponse,
+    ManipulateGraphPlanResponse,
     ManipulateGraphResponse,
     ManipulateNodeResponse,
     SearchQueries,
@@ -198,12 +199,34 @@ class AiProvider:
         response_model: Any,
         user_prompt: str,
     ) -> Any:
-        if (
-            response_model is ManipulateGraphResponse
-            and not user_prompt.lstrip().upper().startswith("MODE: CREATE")
-        ):
+        if response_model is ManipulateGraphResponse:
+            lines = user_prompt.lstrip().splitlines()
+            mode = lines[0].strip().upper() if lines else ""
+            if mode == "MODE: PLAN":
+                return ManipulateGraphPlanResponse
+            if mode == "MODE: CREATE":
+                return ManipulateGraphResponse
             return ManipulateGraphPatchResponse
         return response_model
+
+    @staticmethod
+    def _apply_response_mode_instruction(
+        system_prompt: str,
+        response_model: Any,
+    ) -> str:
+        if response_model is not ManipulateGraphPlanResponse:
+            return system_prompt
+        return (
+            f"{system_prompt}\n\n"
+            "MODE OVERRIDE FOR THIS REQUEST: MODE: PLAN is a graph-creation "
+            "planning phase, not an edit request. This instruction overrides "
+            "any generic edit fallback above. Return only the requested "
+            "blueprint JSON: bounded scope, explicit assumptions, only prior "
+            "knowledge stated by the learner, and all assessable outcomes with "
+            "evidence and essential prerequisite outcome IDs. Do not return "
+            "graph nodes, edges, or a finished graph. Keep independent starting "
+            "outcomes independent and do not invent facts."
+        )
 
     @staticmethod
     def _get_prompt_settings(
@@ -698,6 +721,10 @@ class AiProvider:
                     if attempt is None:
                         continue
                     api_keys, provider, system_prompt, temperature = attempt
+                    system_prompt = self._apply_response_mode_instruction(
+                        system_prompt,
+                        response_model,
+                    )
                     if response_language:
                         system_prompt = (
                             f"{system_prompt}\n\n"

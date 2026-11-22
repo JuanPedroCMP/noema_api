@@ -35,17 +35,33 @@ def test_multiple_choice_contract_uses_app_field_names_and_accepts_legacy_data()
     schema = CreateMultipleChoiceQuestionResponse.model_json_schema()
     assert "choices" in schema["properties"]
     assert "choises" not in schema["properties"]
+    assert schema["properties"]["choices"]["minItems"] == 4
+    assert schema["properties"]["choices"]["maxItems"] == 4
     assert "weight" in schema["$defs"]["Choise"]["properties"]
     assert "weigth" not in schema["$defs"]["Choise"]["properties"]
 
 
-def test_multiple_choice_contract_rejects_too_few_or_multiple_correct_choices():
+def test_multiple_choice_contract_rejects_invalid_choice_count_or_correctness():
     with pytest.raises(ValidationError):
         CreateMultipleChoiceQuestionResponse.model_validate(
             {
                 "title": "Questão",
                 "statement": "Enunciado",
                 "choices": [_choice(True, weight=1), _choice(False, weight=1)],
+            }
+        )
+    with pytest.raises(ValidationError):
+        CreateMultipleChoiceQuestionResponse.model_validate(
+            {
+                "title": "Questão",
+                "statement": "Enunciado",
+                "choices": [
+                    _choice(True, weight=1),
+                    _choice(False, weight=1),
+                    _choice(False, weight=1),
+                    _choice(False, weight=1),
+                    _choice(False, weight=1),
+                ],
             }
         )
     with pytest.raises(ValidationError):
