@@ -26,23 +26,51 @@ class EdgeType(Enum):
     PREREQUISITE = "PREREQUISITE"
 
 class ManipulateGraphResponse(BaseModel):
-    graph_title: str
+    plan: str = Field(
+        default="",
+        description="Brief scope and concepts planned for a newly created graph; "
+        "discarded by the app and not persisted.",
+    )
+    graph_title: str = Field(description="Human-readable title of the graph.")
   # graph_description:str 
-    nodes: list[GraphNode]
-    edges: list[GraphEdge]
+    nodes: list[GraphNode] = Field(
+        description="Graph nodes; each node's type describes its place in the "
+        "AREA/TOPIC/CONCEPT/SUBCONCEPT hierarchy.",
+    )
+    edges: list[GraphEdge] = Field(
+        description="Relations between nodes; edge type describes containment "
+        "or prerequisite semantics, not the node's category.",
+    )
     
 class GraphNode(BaseModel):
-    node_id: int
-    title: str
-    type: GraphType
+    node_id: int = Field(description="Unique graph-local node identifier.")
+    title: str = Field(description="Human-readable name of the node.")
+    type: GraphType = Field(
+        description="Structural node category: AREA, TOPIC, CONCEPT, or SUBCONCEPT.",
+    )
+    level: Literal["foundation", "core", "advanced"] = Field(
+        default="core",
+        description="Transient learning level used to validate graph generation; "
+        "not persisted by the app.",
+    )
 
 class GenerateNodeDescription(BaseModel):
     description: str
 
 class GraphEdge(BaseModel):
-    source_node: int
-    target_node: int
-    type: EdgeType
+    source_node: int = Field(description="Graph-local identifier of the source node.")
+    target_node: int = Field(description="Graph-local identifier of the target node.")
+    type: EdgeType = Field(
+        description="Relation kind: SUBTOPIC represents containment; PREREQUISITE "
+        "means the source should be learned before the target.",
+    )
+    weight: float = Field(
+        default=1.0,
+        ge=0,
+        le=1,
+        description="Prerequisite importance: 1.0 is essential and 0.5 is helpful "
+        "but optional. Stored in the existing graph_edge.weight column.",
+    )
     
 
 ##################
