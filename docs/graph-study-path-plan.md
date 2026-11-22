@@ -10,6 +10,8 @@
    reparar apenas defeitos determinísticos (pré-requisitos em contêineres,
    ciclos, transitividade, duplicatas e auto-laços) e expor avisos estruturados.
    Problemas sem reparo seguro são enviados em uma única tentativa corretiva.
+   Converter SUBTOPIC pai→filho da criação para o sentido legado persistido
+   (filho→pai), sem alterar grafos já armazenados.
 3. **Trilha de aprendizagem:** calcular progresso de contêineres pelas folhas,
    respeitar somente pré-requisitos essenciais para prontidão, manter a abertura
    livre e ordenar recomendações por revisão vencida, camada topológica,
