@@ -1,0 +1,18 @@
+{
+  "graph_title": "Álgebra",
+  "nodes": [
+    {"node_id": 1, "title": "Matemática", "type": "AREA"},
+    {"node_id": 2, "title": "Álgebra", "type": "TOPIC"},
+    {"node_id": 3, "title": "Aritmética", "type": "CONCEPT", "level": "foundation"},
+    {"node_id": 4, "title": "Equações lineares", "type": "CONCEPT", "level": "core"},
+    {"node_id": 5, "title": "Sistemas lineares", "type": "SUBCONCEPT", "level": "advanced"}
+  ],
+  "edges": [
+    {"source_node": 1, "target_node": 2, "type": "SUBTOPIC"},
+    {"source_node": 2, "target_node": 3, "type": "SUBTOPIC"},
+    {"source_node": 2, "target_node": 4, "type": "SUBTOPIC"},
+    {"source_node": 2, "target_node": 5, "type": "SUBTOPIC"},
+    {"source_node": 3, "target_node": 4, "type": "PREREQUISITE", "weight": 1.0},
+    {"source_node": 4, "target_node": 5, "type": "PREREQUISITE", "weight": 1.0}
+  ]
+}
