@@ -74,11 +74,19 @@ async def use_ai(
     ai_provider = AiProvider(db=db, user_token=token)
     logger.info("Starting AI generation for agent %s.", agent_id)
     try:
-        result = await ai_provider.call_ai(
-            agent_id=agent_id,
-            user_prompt=user_prompt,
-            response_language=language,
-        )
+        prompt_lines = user_prompt.lstrip().splitlines()
+        if prompt_lines and prompt_lines[0].strip().upper() == "MODE: SERVER_CREATE":
+            result = await ai_provider.generate_graph_pipeline(
+                agent_id=agent_id,
+                user_prompt=user_prompt,
+                response_language=language,
+            )
+        else:
+            result = await ai_provider.call_ai(
+                agent_id=agent_id,
+                user_prompt=user_prompt,
+                response_language=language,
+            )
     except asyncio.TimeoutError as exc:
         logger.error("AI generation timed out for agent %s.", agent_id)
         raise HTTPException(

@@ -1,8 +1,14 @@
+import asyncio
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
+from app.modules.ai_provider import router as ai_router
 from app.modules.ai_provider.models import (
     EdgeType,
+    GraphBlueprintOutcome,
+    GraphCoverageItem,
     GraphEdge,
     GraphNode,
     GraphType,
@@ -138,6 +144,12 @@ def test_graph_task_selects_full_graph_for_create_and_patch_for_edit():
     )
     assert "overrides any generic edit fallback" in mode_instruction
     assert "Do not return graph nodes, edges" in mode_instruction
+    assert "Make each outcome atomic" in mode_instruction
+    create_instruction = AiProvider._apply_response_mode_instruction(
+        "Legacy graph prompt.",
+        ManipulateGraphResponse,
+    )
+    assert "whole subject, chapter" in create_instruction
     assert (
         AiProvider._get_response_model_for_prompt(
             ManipulateGraphResponse,
@@ -195,6 +207,177 @@ def test_graph_blueprint_contract_rejects_broken_outcome_dependencies():
     blueprint["outcomes"][1]["prerequisite_ids"] = ["outcome_missing"]
     with pytest.raises(ValidationError, match="unknown prerequisite"):
         ManipulateGraphPlanResponse.model_validate(blueprint)
+
+
+def _pipeline_blueprint() -> ManipulateGraphPlanResponse:
+    return ManipulateGraphPlanResponse(
+        scope="Prepare inputs and evaluate model predictions.",
+        outcomes=[
+            GraphBlueprintOutcome(
+                id="outcome_1",
+                outcome="Prepare model inputs.",
+                evidence="Transform a dataset into model-ready features.",
+            ),
+            GraphBlueprintOutcome(
+                id="outcome_2",
+                outcome="Evaluate predictions.",
+                evidence="Compare predictions against a baseline.",
+                prerequisite_ids=["outcome_1"],
+            ),
+        ],
+    )
+
+
+def _pipeline_graph(*, include_coverage: bool = True) -> ManipulateGraphResponse:
+    coverage = (
+        [
+            GraphCoverageItem(
+                outcome_id="outcome_1",
+                outcome="Prepare model inputs.",
+                node_ids=[3],
+            ),
+            GraphCoverageItem(
+                outcome_id="outcome_2",
+                outcome="Evaluate predictions.",
+                node_ids=[4],
+            ),
+        ]
+        if include_coverage
+        else []
+    )
+    return ManipulateGraphResponse(
+        graph_title="Model preparation and evaluation",
+        plan="Prepare model inputs, then evaluate predictions.",
+        coverage=coverage,
+        nodes=[
+            GraphNode(
+                node_id=1,
+                title="Machine learning",
+                type=GraphType.AREA,
+            ),
+            GraphNode(
+                node_id=2,
+                title="Model workflow",
+                type=GraphType.TOPIC,
+            ),
+            GraphNode(
+                node_id=3,
+                title="Prepare model inputs",
+                description="Transform a dataset into model-ready features.",
+                type=GraphType.CONCEPT,
+                level="foundation",
+            ),
+            GraphNode(
+                node_id=4,
+                title="Evaluate predictions",
+                description="Compare predictions against a baseline.",
+                type=GraphType.CONCEPT,
+                level="core",
+            ),
+        ],
+        edges=[
+            GraphEdge(
+                source_node=1,
+                target_node=2,
+                type=EdgeType.SUBTOPIC,
+            ),
+            GraphEdge(
+                source_node=2,
+                target_node=3,
+                type=EdgeType.SUBTOPIC,
+            ),
+            GraphEdge(
+                source_node=2,
+                target_node=4,
+                type=EdgeType.SUBTOPIC,
+            ),
+            GraphEdge(
+                source_node=3,
+                target_node=4,
+                type=EdgeType.PREREQUISITE,
+                weight=1.0,
+            ),
+        ],
+    )
+
+
+def test_server_graph_pipeline_runs_plan_create_and_quality_retry():
+    plan = _pipeline_blueprint()
+    valid_graph = _pipeline_graph()
+    invalid_graph = _pipeline_graph(include_coverage=False)
+    provider = AiProvider(db=None, user_token="test-token")
+    calls = []
+
+    async def call_ai(**kwargs):
+        calls.append(kwargs)
+        if kwargs["user_prompt"].startswith("MODE: PLAN"):
+            return plan
+        if len(calls) == 2:
+            return invalid_graph
+        return valid_graph
+
+    provider.call_ai = call_ai
+    result = asyncio.run(
+        provider.generate_graph_pipeline(
+            user_prompt="MODE: SERVER_CREATE\nLearner request:\nTrain a model.",
+            agent_id=uuid4(),
+        )
+    )
+
+    assert len(calls) == 3
+    assert calls[0]["user_prompt"].startswith("MODE: PLAN")
+    assert calls[1]["user_prompt"].lstrip().startswith("MODE: CREATE")
+    assert "missing_coverage_map" in calls[2]["user_prompt"]
+    assert result["blueprint"]["outcomes"][1]["prerequisite_ids"] == ["outcome_1"]
+    assert result["coverage"][0]["outcome_id"] == "outcome_1"
+
+
+def test_server_graph_audit_rejects_duplicate_coverage_text_and_non_finite_weight():
+    graph = _pipeline_graph()
+    graph.coverage[1].outcome = graph.coverage[0].outcome
+    graph.edges[-1].weight = float("nan")
+
+    issues = AiProvider._validate_generated_graph(graph, _pipeline_blueprint())
+
+    assert "coverage_duplicate_text:outcome_2" in issues
+    assert "invalid_weight:3,4" in issues
+
+
+def test_use_ai_routes_server_create_requests_to_graph_pipeline(monkeypatch):
+    class FakeAiProvider:
+        def __init__(self, *, db, user_token):
+            pass
+
+        async def generate_graph_pipeline(
+            self,
+            *,
+            user_prompt,
+            agent_id,
+            response_language,
+        ):
+            return {"graph_title": "Server-generated graph"}
+
+        async def call_ai(self, **kwargs):
+            raise AssertionError("Server graph requests must use the pipeline.")
+
+    monkeypatch.setattr(ai_router, "AiProvider", FakeAiProvider)
+    monkeypatch.setattr(
+        ai_router,
+        "_resolve_response_language",
+        lambda db, response_language: response_language,
+    )
+
+    result = asyncio.run(
+        ai_router.use_ai(
+            user_prompt="MODE: SERVER_CREATE\nLearner request:\nTrain a model.",
+            agent_id=uuid4(),
+            response_language=None,
+            token="test-token",
+            db=None,
+        )
+    )
+
+    assert result == {"graph_title": "Server-generated graph"}
 
 
 def test_graph_edit_patch_contract_matches_the_app_payload():

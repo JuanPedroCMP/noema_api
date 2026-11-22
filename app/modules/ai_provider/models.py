@@ -50,7 +50,8 @@ class GraphBlueprintOutcome(BaseModel):
     )
     outcome: str = Field(
         min_length=1,
-        description="One observable, in-scope learner outcome.",
+        description="One atomic, observable in-scope outcome covering a single "
+        "concept, skill, or bounded procedure for one focused lesson.",
     )
     evidence: str = Field(
         min_length=1,
@@ -167,11 +168,14 @@ class ManipulateGraphResponse(BaseModel):
     
 class GraphNode(BaseModel):
     node_id: int = Field(description="Unique graph-local node identifier.")
-    title: str = Field(description="Human-readable name of the node.")
+    title: str = Field(
+        description="Specific name of one concept or bounded skill; do not use "
+        "a broad subject or combine independently teachable ideas.",
+    )
     description: str = Field(
         default="",
-        description="Concise learning objective for a leaf, describing an "
-        "observable outcome; a short scope summary for a container.",
+        description="Concise, specific learning objective for one leaf, "
+        "describing an observable outcome; a short scope summary for a container.",
     )
     type: GraphType = Field(
         description="Structural node category: AREA, TOPIC, CONCEPT, or SUBCONCEPT.",

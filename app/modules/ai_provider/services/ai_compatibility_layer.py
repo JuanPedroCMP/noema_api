@@ -6,7 +6,9 @@ import asyncio
 import importlib
 import json
 import logging
+import math
 from collections.abc import Mapping, Sequence
+from difflib import SequenceMatcher
 from time import perf_counter
 from typing import Any
 from uuid import UUID
@@ -72,6 +74,7 @@ QUALITY_SCORES = {
 }
 AI_MODEL_REQUEST_TIMEOUT_SECONDS = 240
 AI_MODEL_HTTP_TIMEOUT_SECONDS = AI_MODEL_REQUEST_TIMEOUT_SECONDS + 30
+GRAPH_CREATION_ATTEMPTS = 3
 
 # Keep every planned task here. Some response classes are intentionally not
 # defined yet and can be added to app.modules.ai_provider.models later.
@@ -214,19 +217,39 @@ class AiProvider:
         system_prompt: str,
         response_model: Any,
     ) -> str:
-        if response_model is not ManipulateGraphPlanResponse:
-            return system_prompt
-        return (
-            f"{system_prompt}\n\n"
-            "MODE OVERRIDE FOR THIS REQUEST: MODE: PLAN is a graph-creation "
-            "planning phase, not an edit request. This instruction overrides "
-            "any generic edit fallback above. Return only the requested "
-            "blueprint JSON: bounded scope, explicit assumptions, only prior "
-            "knowledge stated by the learner, and all assessable outcomes with "
-            "evidence and essential prerequisite outcome IDs. Do not return "
-            "graph nodes, edges, or a finished graph. Keep independent starting "
-            "outcomes independent and do not invent facts."
-        )
+        if response_model is ManipulateGraphPlanResponse:
+            return (
+                f"{system_prompt}\n\n"
+                "MODE OVERRIDE FOR THIS REQUEST: MODE: PLAN is a graph-creation "
+                "planning phase, not an edit request. This instruction overrides "
+                "any generic edit fallback above. Return only the requested "
+                "blueprint JSON: bounded scope, explicit assumptions, only prior "
+                "knowledge stated by the learner, and all assessable outcomes with "
+                "evidence and essential prerequisite outcome IDs. Do not return "
+                "graph nodes, edges, or a finished graph. Keep independent starting "
+                "outcomes independent and do not invent facts. Make each outcome "
+                "atomic: one concept, skill, or bounded procedure for one focused "
+                "lesson of about 30-90 minutes. Split compound outcomes that combine "
+                "independently teachable ideas, multiple actions, or multiple lessons."
+            )
+        if response_model is ManipulateGraphResponse:
+            return (
+                f"{system_prompt}\n\n"
+                "MODE OVERRIDE FOR THIS REQUEST: create a new learning graph, "
+                "not an edit patch. Do not ask for user confirmation between "
+                "planning and graph creation. Keep each leaf specific, atomic, "
+                "and teachable in one focused 30-90 minute lesson. If one outcome "
+                "contains independently teachable ideas, split it into multiple "
+                "leaves; keep broad categories as containers. Before returning, "
+                "check each leaf title and objective: it must teach one concept "
+                "or bounded skill, not a whole subject, chapter, list, or "
+                "multi-step workflow. Titles such as 'X and Y', 'fundamentals of "
+                "X', or 'design, build, and test X' are warning signs: split "
+                "independently teachable concepts/actions into separate leaves "
+                "and organize them under containers. Preserve full blueprint "
+                "coverage and return all graph fields required by the schema."
+            )
+        return system_prompt
 
     @staticmethod
     def _get_prompt_settings(
@@ -767,3 +790,363 @@ class AiProvider:
             "AI generation failed for every configured model: "
             + " | ".join(failures)
         )
+
+    async def generate_graph_pipeline(
+        self,
+        *,
+        user_prompt: str,
+        agent_id: UUID,
+        response_language: str | None = None,
+    ) -> dict[str, Any]:
+        lines = user_prompt.strip().splitlines()
+        if not lines or lines[0].strip().upper() != "MODE: SERVER_CREATE":
+            raise ValueError("Graph pipeline requests must use MODE: SERVER_CREATE.")
+        learner_request = "\n".join(lines[1:]).strip()
+        if learner_request.lower().startswith("learner request:"):
+            learner_request = learner_request.split(":", 1)[1].strip()
+        if not learner_request:
+            raise ValueError("The learner request cannot be empty.")
+
+        plan = await self.call_ai(
+            user_prompt=f"MODE: PLAN\nLearner request:\n{learner_request}",
+            agent_id=agent_id,
+            response_language=response_language,
+        )
+        if not isinstance(plan, ManipulateGraphPlanResponse):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="The configured agent did not return a graph blueprint.",
+            )
+
+        create_prompt = f"""
+MODE: CREATE
+Learner request:
+{learner_request}
+
+Approved learning blueprint (authoritative source of truth):
+{json.dumps(plan.model_dump(mode="json"), ensure_ascii=False)}
+
+Build the graph now without asking the learner to confirm the blueprint. Keep
+the approved scope, assumptions, prior knowledge, outcomes, and dependencies.
+Do not silently omit or add outcomes. Make leaves specific, atomic concepts or
+bounded skills that fit one focused lesson of about 30-90 minutes; split broad
+outcomes into multiple teachable leaves rather than copying a broad outcome
+into one leaf. Each title should identify a distinct concept or action, and
+each description should say what the learner can do with that concept. Keep
+broad categories as containers. Compound titles such as "X and Y",
+"fundamentals of X", or "design, build, and test X" are warning signs: split
+independently teachable concepts/actions into separate leaves. In coverage,
+include exactly one item per planned outcome, copy its text exactly, set
+outcome_id to its ID, and map it to one or more leaf node IDs. Every leaf must
+map to at least one outcome.
+Represent each planned prerequisite with an essential PREREQUISITE path
+(weight >= 0.7) between leaves. Use SUBTOPIC only for hierarchy.
+"""
+        feedback = ""
+        for attempt in range(1, GRAPH_CREATION_ATTEMPTS + 1):
+            graph = await self.call_ai(
+                user_prompt=create_prompt + feedback,
+                agent_id=agent_id,
+                response_language=response_language,
+            )
+            if not isinstance(graph, ManipulateGraphResponse):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="The configured agent did not return a graph.",
+                )
+            issues = self._validate_generated_graph(graph, plan)
+            if not issues:
+                result = graph.model_dump(mode="json")
+                result["blueprint"] = plan.model_dump(mode="json")
+                result.setdefault("graph_description", learner_request)
+                return result
+            feedback = (
+                "\n\nThe previous graph failed the server-side learning-map "
+                "audit. Correct every issue while preserving valid content:\n"
+                + "\n".join(f"- {issue}" for issue in issues)
+                + "\nReturn the complete corrected graph JSON."
+            )
+
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "The graph did not pass the server-side quality audit after "
+                f"{GRAPH_CREATION_ATTEMPTS} attempts: "
+                + " | ".join(issues)
+            ),
+        )
+
+    @staticmethod
+    def _validate_generated_graph(
+        graph: ManipulateGraphResponse,
+        blueprint: ManipulateGraphPlanResponse,
+    ) -> list[str]:
+        issues: list[str] = []
+        if not graph.graph_title.strip():
+            issues.append("missing_graph_title")
+        if not graph.plan.strip():
+            issues.append("missing_scope_plan")
+        if not graph.nodes:
+            return [*issues, "empty_graph"]
+
+        nodes_by_id: dict[int, Any] = {}
+        normalized_titles: dict[str, int] = {}
+        normalized_objectives: dict[str, int] = {}
+        for node in graph.nodes:
+            if node.node_id in nodes_by_id:
+                issues.append(f"duplicate_node_id:{node.node_id}")
+                continue
+            nodes_by_id[node.node_id] = node
+            normalized_title = "".join(node.title.casefold().split())
+            if not normalized_title:
+                issues.append(f"empty_node_title:{node.node_id}")
+            elif normalized_title in normalized_titles:
+                issues.append(
+                    f"duplicate_node_title:{normalized_titles[normalized_title]},"
+                    f"{node.node_id}"
+                )
+            normalized_titles[normalized_title] = node.node_id
+
+        if not graph.coverage:
+            issues.append("missing_coverage_map")
+
+        edge_pairs: set[tuple[int, int]] = set()
+        subtopic_edges: list[Any] = []
+        prerequisite_edges: list[Any] = []
+        parents_by_child: dict[int, set[int]] = {}
+        children_by_parent: dict[int, set[int]] = {}
+        for edge in graph.edges:
+            source = nodes_by_id.get(edge.source_node)
+            target = nodes_by_id.get(edge.target_node)
+            if source is None or target is None or edge.source_node == edge.target_node:
+                issues.append(
+                    f"invalid_edge:{edge.source_node},{edge.target_node}"
+                )
+                continue
+            pair = (edge.source_node, edge.target_node)
+            if pair in edge_pairs:
+                issues.append(f"duplicate_edge:{edge.source_node},{edge.target_node}")
+            edge_pairs.add(pair)
+            if not math.isfinite(edge.weight) or not 0 <= edge.weight <= 1:
+                issues.append(f"invalid_weight:{edge.source_node},{edge.target_node}")
+            if edge.type.value == "SUBTOPIC":
+                subtopic_edges.append(edge)
+                children_by_parent.setdefault(edge.source_node, set()).add(
+                    edge.target_node
+                )
+                parents_by_child.setdefault(edge.target_node, set()).add(
+                    edge.source_node
+                )
+                rank = {
+                    "AREA": 0,
+                    "TOPIC": 1,
+                    "CONCEPT": 2,
+                    "SUBCONCEPT": 3,
+                }
+                if rank[source.type.value] >= rank[target.type.value]:
+                    issues.append(
+                        f"invalid_hierarchy_order:{edge.source_node},{edge.target_node}"
+                    )
+            else:
+                prerequisite_edges.append(edge)
+
+        for node in graph.nodes:
+            parent_count = len(parents_by_child.get(node.node_id, set()))
+            if node.type.value == "AREA":
+                if parent_count > 1:
+                    issues.append(f"invalid_parent_count:{node.node_id}")
+            elif parent_count != 1:
+                issues.append(f"invalid_parent_count:{node.node_id}")
+            if node.type.value in {"AREA", "TOPIC"} and not children_by_parent.get(
+                node.node_id
+            ):
+                issues.append(f"empty_container:{node.node_id}")
+
+        def contains_cycle(edges: list[Any]) -> bool:
+            adjacency: dict[int, list[int]] = {}
+            for edge in edges:
+                adjacency.setdefault(edge.source_node, []).append(edge.target_node)
+            states: dict[int, int] = {}
+
+            def visit(node_id: int) -> bool:
+                state = states.get(node_id, 0)
+                if state == 1:
+                    return True
+                if state == 2:
+                    return False
+                states[node_id] = 1
+                if any(visit(target) for target in adjacency.get(node_id, [])):
+                    return True
+                states[node_id] = 2
+                return False
+
+            return any(visit(node_id) for node_id in adjacency)
+
+        if contains_cycle(subtopic_edges):
+            issues.append("subtopic_cycle")
+        if contains_cycle(prerequisite_edges):
+            issues.append("prerequisite_cycle")
+
+        container_ids = {
+            node.node_id
+            for node in graph.nodes
+            if node.type.value in {"AREA", "TOPIC"}
+        } | set(children_by_parent)
+        leaf_ids = set(nodes_by_id) - container_ids
+        prerequisites_by_target: dict[int, list[Any]] = {}
+        for edge in prerequisite_edges:
+            prerequisites_by_target.setdefault(edge.target_node, []).append(edge)
+            if edge.source_node not in leaf_ids or edge.target_node not in leaf_ids:
+                issues.append(
+                    f"container_prerequisite:{edge.source_node},{edge.target_node}"
+                )
+
+        foundation_ids = {
+            node.node_id
+            for node in graph.nodes
+            if node.node_id in leaf_ids and node.level == "foundation"
+        }
+        reachable_from_foundation = set(foundation_ids)
+        pending = list(foundation_ids)
+        while pending:
+            source_id = pending.pop()
+            for edge in prerequisite_edges:
+                if (
+                    edge.source_node == source_id
+                    and edge.weight >= 0.7
+                    and edge.target_node not in reachable_from_foundation
+                ):
+                    reachable_from_foundation.add(edge.target_node)
+                    pending.append(edge.target_node)
+
+        for leaf_id in leaf_ids:
+            leaf = nodes_by_id[leaf_id]
+            objective = " ".join(leaf.description.casefold().split())
+            if not objective:
+                issues.append(f"missing_learning_objective:{leaf_id}")
+            elif objective in normalized_objectives:
+                issues.append(f"duplicate_learning_objective:{leaf_id}")
+            normalized_objectives[objective] = leaf_id
+            incoming = prerequisites_by_target.get(leaf_id, [])
+            if leaf.level == "foundation":
+                if incoming:
+                    issues.append(f"foundation_has_prerequisite:{leaf_id}")
+            elif not any(edge.weight >= 0.7 for edge in incoming):
+                issues.append(f"leaf_without_essential_prerequisite:{leaf_id}")
+            for edge in incoming:
+                source = nodes_by_id.get(edge.source_node)
+                if source is not None and (
+                    {"foundation": 0, "core": 1, "advanced": 2}[source.level]
+                    > {"foundation": 0, "core": 1, "advanced": 2}[leaf.level]
+                ):
+                    issues.append(
+                        f"prerequisite_level_regression:{edge.source_node},{leaf_id}"
+                    )
+            if leaf_id not in reachable_from_foundation:
+                issues.append(f"leaf_unreachable_from_foundation:{leaf_id}")
+
+        for edge in prerequisite_edges:
+            pending_paths = [(edge.source_node, 0)]
+            visited_paths = {edge.source_node}
+            while pending_paths:
+                current, depth = pending_paths.pop()
+                for next_edge in prerequisite_edges:
+                    if (
+                        next_edge.source_node != current
+                        or next_edge is edge
+                        or next_edge.weight < 0.7
+                    ):
+                        continue
+                    if next_edge.target_node == edge.target_node and depth >= 1:
+                        issues.append(
+                            f"transitive_prerequisite:{edge.source_node},"
+                            f"{edge.target_node}"
+                        )
+                        pending_paths.clear()
+                        break
+                    if next_edge.target_node not in visited_paths:
+                        visited_paths.add(next_edge.target_node)
+                        pending_paths.append((next_edge.target_node, depth + 1))
+
+        coverage_by_outcome: dict[str, Any] = {}
+        mapped_leaf_ids: set[int] = set()
+        normalized_coverage_outcomes: set[str] = set()
+        outcomes_by_id = {outcome.id: outcome for outcome in blueprint.outcomes}
+        for item in graph.coverage:
+            outcome_id = item.outcome_id.strip()
+            planned = outcomes_by_id.get(outcome_id)
+            if planned is None:
+                issues.append(f"coverage_unknown_outcome:{outcome_id}")
+                continue
+            if outcome_id in coverage_by_outcome:
+                issues.append(f"coverage_duplicate_outcome:{outcome_id}")
+            coverage_by_outcome[outcome_id] = item
+            normalized_outcome = " ".join(item.outcome.casefold().split())
+            if not normalized_outcome:
+                issues.append(f"coverage_empty_outcome:{outcome_id}")
+            elif normalized_outcome in normalized_coverage_outcomes:
+                issues.append(f"coverage_duplicate_text:{outcome_id}")
+            normalized_coverage_outcomes.add(normalized_outcome)
+            if " ".join(item.outcome.split()) != " ".join(planned.outcome.split()):
+                issues.append(f"coverage_text_mismatch:{outcome_id}")
+            if not item.node_ids:
+                issues.append(f"coverage_without_nodes:{outcome_id}")
+            for node_id in item.node_ids:
+                if node_id not in leaf_ids:
+                    issues.append(f"coverage_not_leaf:{outcome_id},{node_id}")
+                else:
+                    mapped_leaf_ids.add(node_id)
+        for outcome_id in outcomes_by_id.keys() - coverage_by_outcome.keys():
+            issues.append(f"coverage_missing_outcome:{outcome_id}")
+        for leaf_id in leaf_ids - mapped_leaf_ids:
+            issues.append(f"leaf_without_coverage:{leaf_id}")
+
+        def has_essential_path(sources: list[int], targets: set[int]) -> bool:
+            for source_id in sources:
+                visited = {source_id}
+                pending_nodes = [source_id]
+                while pending_nodes:
+                    current = pending_nodes.pop()
+                    for edge in prerequisite_edges:
+                        if edge.source_node != current or edge.weight < 0.7:
+                            continue
+                        if edge.target_node in targets:
+                            return True
+                        if edge.target_node not in visited:
+                            visited.add(edge.target_node)
+                            pending_nodes.append(edge.target_node)
+            return False
+
+        for outcome in blueprint.outcomes:
+            dependent = coverage_by_outcome.get(outcome.id)
+            if dependent is None:
+                continue
+            dependent_leaves = set(dependent.node_ids) & leaf_ids
+            for prerequisite_id in outcome.prerequisite_ids:
+                prerequisite = coverage_by_outcome.get(prerequisite_id)
+                if prerequisite is None:
+                    continue
+                prerequisite_leaves = [
+                    node_id
+                    for node_id in prerequisite.node_ids
+                    if node_id in leaf_ids
+                ]
+                if not has_essential_path(prerequisite_leaves, dependent_leaves):
+                    issues.append(
+                        f"blueprint_dependency_missing:{prerequisite_id},{outcome.id}"
+                    )
+
+        titles = [node.title.casefold().replace(" ", "") for node in graph.nodes]
+        for index, first in enumerate(titles):
+            if len(first) < 5:
+                continue
+            for second_index in range(index + 1, len(titles)):
+                second = titles[second_index]
+                if len(second) >= 5 and SequenceMatcher(
+                    None,
+                    first,
+                    second,
+                ).ratio() >= 0.88:
+                    issues.append(f"similar_node_titles:{index},{second_index}")
+
+        return list(dict.fromkeys(issues))
