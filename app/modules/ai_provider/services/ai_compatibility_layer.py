@@ -352,14 +352,21 @@ class AiProvider:
         user_prompt: str,
         response_model: Any,
     ) -> tuple[Any, Any]:
+        if not api_keys:
+            raise RuntimeError(
+                f"Cannot invoke model '{model.display_name}' without an API key."
+            )
         init_chat_model, chat_prompt_template = await asyncio.to_thread(
             _import_langchain
         )
+        event_loop = asyncio.get_running_loop()
+        key_timeout_seconds = AI_MODEL_REQUEST_TIMEOUT_SECONDS / len(api_keys)
         last_error: Exception | None = None
         attempt_errors: list[Exception] = []
 
-        for api_key in api_keys:
+        for key_index, api_key in enumerate(api_keys, start=1):
             attempt_started = perf_counter()
+            key_deadline = event_loop.time() + key_timeout_seconds
             try:
                 decrypted_key = decrypt(api_key.encrypted_key)
                 if provider.protocol == "openai_compatible":
@@ -401,11 +408,12 @@ class AiProvider:
                         **client_options,
                     )
                 structured_output_options: dict[str, str] = {}
+                key_system_prompt = system_prompt
                 if model.slug.rsplit("/", 1)[-1].casefold().startswith(
                     "gpt-oss-"
                 ):
                     structured_output_options["method"] = "json_mode"
-                    system_prompt = (
+                    key_system_prompt = (
                         f"{system_prompt}\n\n"
                         "Return only JSON matching the following JSON Schema:\n"
                         f"{json.dumps(response_model.model_json_schema(), ensure_ascii=False)}"
@@ -419,7 +427,7 @@ class AiProvider:
                     [
                         (
                             "system",
-                            system_prompt.replace("{", "{{").replace("}", "}}"),
+                            key_system_prompt.replace("{", "{{").replace("}", "}}"),
                         ),
                         ("human", "{user_prompt}"),
                     ]
@@ -427,7 +435,7 @@ class AiProvider:
                 structured_chain = prompt | structured_model
                 result = await asyncio.wait_for(
                     structured_chain.ainvoke({"user_prompt": user_prompt}),
-                    timeout=AI_MODEL_REQUEST_TIMEOUT_SECONDS,
+                    timeout=max(0, key_deadline - event_loop.time()),
                 )
                 try:
                     parsed, raw_response = self._parse_model_result(
@@ -464,7 +472,7 @@ class AiProvider:
                         structured_chain.ainvoke(
                             {"user_prompt": correction_prompt}
                         ),
-                        timeout=AI_MODEL_REQUEST_TIMEOUT_SECONDS,
+                        timeout=max(0, key_deadline - event_loop.time()),
                     )
                     try:
                         parsed, raw_response = self._parse_model_result(
@@ -486,8 +494,10 @@ class AiProvider:
                 last_error = exc
                 attempt_errors.append(exc)
                 logger.warning(
-                    "AI model %s failed after %.2fs: %s",
+                    "AI model %s API-key attempt %d/%d failed after %.2fs: %s",
                     model.display_name,
+                    key_index,
+                    len(api_keys),
                     perf_counter() - attempt_started,
                     _format_provider_error(exc),
                 )
@@ -722,62 +732,59 @@ class AiProvider:
             for model, _, _ in preference_order
         }
 
-        for key_source in ("personal", "shared"):
-            keys_by_model = (
-                personal_keys_by_model
-                if key_source == "personal"
-                else shared_keys_by_model
-            )
-            for model, _, agent_model in preference_order:
-                api_keys = keys_by_model.get(model.id, [])
-                if not api_keys:
+        for model, _, agent_model in preference_order:
+            api_keys = [
+                *personal_keys_by_model.get(model.id, []),
+                *shared_keys_by_model.get(model.id, []),
+            ]
+            if not api_keys:
+                continue
+            try:
+                attempt = await run_in_threadpool(
+                    self._prepare_model_attempt,
+                    model,
+                    agent,
+                    agent_model,
+                    owner_id,
+                    api_keys,
+                )
+                if attempt is None:
                     continue
-                try:
-                    attempt = await run_in_threadpool(
-                        self._prepare_model_attempt,
-                        model,
-                        agent,
-                        agent_model,
-                        owner_id,
-                        api_keys,
+                api_keys, provider, system_prompt, temperature = attempt
+                system_prompt = self._apply_response_mode_instruction(
+                    system_prompt,
+                    response_model,
+                )
+                if response_language:
+                    system_prompt = (
+                        f"{system_prompt}\n\n"
+                        f"Respond in {response_language}. Keep all natural-language "
+                        "content in that language, but do not translate JSON keys, "
+                        "code identifiers, or fixed enum values required by the schema."
                     )
-                    if attempt is None:
-                        continue
-                    api_keys, provider, system_prompt, temperature = attempt
-                    system_prompt = self._apply_response_mode_instruction(
-                        system_prompt,
-                        response_model,
-                    )
-                    if response_language:
-                        system_prompt = (
-                            f"{system_prompt}\n\n"
-                            f"Respond in {response_language}. Keep all natural-language "
-                            "content in that language, but do not translate JSON keys, "
-                            "code identifiers, or fixed enum values required by the schema."
-                        )
-                    parsed, raw_response = await self._invoke_model(
-                        model,
-                        api_keys,
-                        provider,
-                        system_prompt,
-                        temperature,
-                        user_prompt,
-                        response_model,
-                    )
-                    await run_in_threadpool(
-                        self._record_usage, agent_model, raw_response
-                    )
-                    return parsed
-                except Exception as exc:
-                    failures.append(
-                        f"{model_names[id(model)]} ({key_source} keys): {exc}"
-                    )
-                    failure_errors.append(exc)
-                    logger.warning(
-                        "Configured AI model failed for agent %s.",
-                        agent_id,
-                        exc_info=True,
-                    )
+                parsed, raw_response = await self._invoke_model(
+                    model,
+                    api_keys,
+                    provider,
+                    system_prompt,
+                    temperature,
+                    user_prompt,
+                    response_model,
+                )
+                await run_in_threadpool(
+                    self._record_usage, agent_model, raw_response
+                )
+                return parsed
+            except Exception as exc:
+                failures.append(
+                    f"{model_names[id(model)]} (configured API keys): {exc}"
+                )
+                failure_errors.append(exc)
+                logger.warning(
+                    "Configured AI model failed for agent %s.",
+                    agent_id,
+                    exc_info=True,
+                )
 
         if not failures:
             raise RuntimeError(f"No models are configured for agent '{agent_id}'.")

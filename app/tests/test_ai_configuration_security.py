@@ -424,13 +424,74 @@ def test_ai_generation_skips_models_without_active_api_keys(monkeypatch):
     )
 
     assert result == "response"
-    assert provider_lookups == [
-        str(model_with_key.id_ai_provider),
-        str(model_with_shared_key.id_ai_provider),
-    ]
-    assert invoked_models == [model_with_key, model_with_shared_key]
-    assert invoked_keys == [[personal_key], [shared_key]]
+    assert provider_lookups == [str(model_with_shared_key.id_ai_provider)]
+    assert invoked_models == [model_with_shared_key]
+    assert invoked_keys == [[shared_key]]
     assert all("Respond in Portuguese." in prompt for prompt in invoked_prompts)
+
+
+def test_ai_generation_tries_same_model_shared_key_before_fallback_model(monkeypatch):
+    from app.modules.ai_provider.services import ai_compatibility_layer
+
+    user_id = uuid4()
+    agent_id = uuid4()
+    preferred_model = SimpleNamespace(
+        id=uuid4(), display_name="Preferred model", id_ai_provider=uuid4()
+    )
+    fallback_model = SimpleNamespace(
+        id=uuid4(), display_name="Fallback model", id_ai_provider=uuid4()
+    )
+    personal_key = object()
+    same_provider_shared_key = object()
+    fallback_key = object()
+    context = (
+        user_id,
+        SimpleNamespace(id=agent_id),
+        object(),
+        [
+            (preferred_model, 2.0, object()),
+            (fallback_model, 1.0, object()),
+        ],
+        None,
+        {
+            preferred_model.id: [personal_key],
+            fallback_model.id: [fallback_key],
+        },
+        {preferred_model.id: [same_provider_shared_key]},
+    )
+    provider = ai_compatibility_layer.AiProvider(cast(Session, object()), "token")
+    monkeypatch.setattr(provider, "_prepare_call_context", lambda *_args: context)
+    monkeypatch.setattr(
+        provider,
+        "_prepare_model_attempt",
+        lambda _model, _agent, _agent_model, _owner_id, api_keys: (
+            api_keys,
+            SimpleNamespace(is_active=True),
+            "system",
+            0.3,
+        ),
+    )
+    attempted_models = []
+    attempted_keys = []
+
+    async def invoke_model(model, api_keys, *_args):
+        attempted_models.append(model)
+        attempted_keys.append(api_keys)
+        if model is preferred_model:
+            raise RuntimeError("Both keys for the preferred model failed.")
+        return "fallback response", object()
+
+    monkeypatch.setattr(provider, "_invoke_model", invoke_model)
+    monkeypatch.setattr(provider, "_record_usage", lambda *_args: None)
+
+    result = asyncio.run(provider.call_ai("prompt", agent_id))
+
+    assert result == "fallback response"
+    assert attempted_models == [preferred_model, fallback_model]
+    assert attempted_keys == [
+        [personal_key, same_provider_shared_key],
+        [fallback_key],
+    ]
 
 
 def test_ai_generation_fails_fast_without_any_active_api_keys(monkeypatch):
@@ -690,6 +751,79 @@ def test_invalid_structured_response_is_retried_and_validated(
     assert "not valid JSON" in prompts[1]
 
 
+def test_key_failover_does_not_duplicate_gpt_oss_schema_in_system_prompt(
+    monkeypatch,
+):
+    from app.modules.ai_provider.models import CreateFlashcard
+    from app.modules.ai_provider.services import ai_compatibility_layer
+
+    system_prompts = []
+
+    class Chain:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        async def ainvoke(self, _values):
+            if self.api_key == "first-key":
+                raise RuntimeError("The first key is unavailable.")
+            return {
+                "parsed": {"title": "Title", "statement": "Statement"},
+                "raw": object(),
+            }
+
+    class Prompt:
+        def __or__(self, structured_model):
+            return Chain(structured_model.api_key)
+
+    class PromptTemplate:
+        @staticmethod
+        def from_messages(messages):
+            system_prompts.append(messages[0][1])
+            return Prompt()
+
+    class ChatModel:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def with_structured_output(self, *_args, **_kwargs):
+            return SimpleNamespace(api_key=self.api_key)
+
+    def init_chat_model(*_args, api_key, **_kwargs):
+        return ChatModel(api_key)
+
+    monkeypatch.setattr(
+        ai_compatibility_layer,
+        "_import_langchain",
+        lambda: (init_chat_model, PromptTemplate),
+    )
+    monkeypatch.setattr(ai_compatibility_layer, "decrypt", lambda key: key)
+
+    result, _raw = asyncio.run(
+        ai_compatibility_layer.AiProvider(object(), "token")._invoke_model(
+            model=SimpleNamespace(
+                slug="openai/gpt-oss-120b",
+                display_name="Test model",
+            ),
+            api_keys=[
+                SimpleNamespace(encrypted_key="first-key"),
+                SimpleNamespace(encrypted_key="second-key"),
+            ],
+            provider=SimpleNamespace(protocol="native", slug="openai"),
+            system_prompt="Return a flashcard.",
+            temperature=0.3,
+            user_prompt="Create one flashcard.",
+            response_model=CreateFlashcard,
+        )
+    )
+
+    assert isinstance(result, CreateFlashcard)
+    assert len(system_prompts) == 2
+    assert system_prompts[0] == system_prompts[1]
+    assert system_prompts[0].count(
+        "Return only JSON matching the following JSON Schema:"
+    ) == 1
+
+
 def test_langchain_import_does_not_block_the_event_loop(monkeypatch):
     import time
 
@@ -766,7 +900,7 @@ def test_model_timeout_still_allows_the_next_api_key_to_succeed(monkeypatch):
 
         async def ainvoke(self, _values):
             if self.api_key == "slow-key":
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.075)
             return {
                 "parsed": {"title": "Title", "statement": "Statement"},
                 "raw": object(),
@@ -800,7 +934,7 @@ def test_model_timeout_still_allows_the_next_api_key_to_succeed(monkeypatch):
     monkeypatch.setattr(
         ai_compatibility_layer,
         "AI_MODEL_REQUEST_TIMEOUT_SECONDS",
-        0.01,
+        0.1,
     )
     monkeypatch.setattr(ai_compatibility_layer, "decrypt", lambda key: key)
     provider = ai_compatibility_layer.AiProvider(cast(Session, object()), "token")
