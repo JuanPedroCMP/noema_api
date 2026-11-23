@@ -891,6 +891,28 @@ Represent each planned prerequisite with an essential PREREQUISITE path
                 + "\nReturn the complete corrected graph JSON."
             )
 
+        if all(
+            issue.startswith("transitive_prerequisite:")
+            or issue.startswith("foundation_has_prerequisite:")
+            for issue in issues
+        ):
+            self._remove_transitive_prerequisite_edges(graph)
+            remaining_issues = self._validate_generated_graph(graph, plan)
+            if len(remaining_issues) == 1 and remaining_issues[0].startswith(
+                "foundation_has_prerequisite:"
+            ):
+                logger.warning(
+                    "Accepting graph after %s attempts with one non-blocking "
+                    "foundation-level warning: %s",
+                    GRAPH_CREATION_ATTEMPTS,
+                    remaining_issues[0],
+                )
+                result = graph.model_dump(mode="json")
+                result["blueprint"] = plan.model_dump(mode="json")
+                result.setdefault("graph_description", learner_request)
+                return result
+            issues = remaining_issues
+
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
@@ -899,6 +921,35 @@ Represent each planned prerequisite with an essential PREREQUISITE path
                 + " | ".join(issues)
             ),
         )
+
+    @staticmethod
+    def _remove_transitive_prerequisite_edges(
+        graph: ManipulateGraphResponse,
+    ) -> None:
+        for edge in graph.edges.copy():
+            if edge.type.value != "PREREQUISITE":
+                continue
+            pending = [edge.source_node]
+            visited = {edge.source_node}
+            has_alternative_path = False
+            while pending and not has_alternative_path:
+                current = pending.pop()
+                for candidate in graph.edges:
+                    if (
+                        candidate is edge
+                        or candidate.type.value != "PREREQUISITE"
+                        or candidate.weight < 0.7
+                        or candidate.source_node != current
+                    ):
+                        continue
+                    if candidate.target_node == edge.target_node:
+                        has_alternative_path = True
+                        break
+                    if candidate.target_node not in visited:
+                        visited.add(candidate.target_node)
+                        pending.append(candidate.target_node)
+            if has_alternative_path:
+                graph.edges.remove(edge)
 
     @staticmethod
     def _validate_generated_graph(

@@ -333,6 +333,106 @@ def test_server_graph_pipeline_runs_plan_create_and_quality_retry():
     assert result["coverage"][0]["outcome_id"] == "outcome_1"
 
 
+def test_server_graph_pipeline_accepts_one_safe_residual_after_three_attempts():
+    plan = _pipeline_blueprint()
+    graph = _pipeline_graph()
+    graph.nodes.append(
+        GraphNode(
+            node_id=5,
+            title="Check feature completeness",
+            description="Check that every required model input feature is present.",
+            type=GraphType.CONCEPT,
+            level="foundation",
+        )
+    )
+    graph.nodes.append(
+        GraphNode(
+            node_id=6,
+            title="Normalize model inputs",
+            description="Normalize model inputs to a consistent numeric range.",
+            type=GraphType.CONCEPT,
+            level="core",
+        )
+    )
+    graph.coverage[0].node_ids.append(5)
+    graph.coverage[1].node_ids.append(6)
+    graph.edges.extend(
+        [
+            GraphEdge(
+                source_node=2,
+                target_node=5,
+                type=EdgeType.SUBTOPIC,
+            ),
+            GraphEdge(
+                source_node=2,
+                target_node=6,
+                type=EdgeType.SUBTOPIC,
+            ),
+            GraphEdge(
+                source_node=3,
+                target_node=5,
+                type=EdgeType.PREREQUISITE,
+            ),
+            GraphEdge(
+                source_node=3,
+                target_node=6,
+                type=EdgeType.PREREQUISITE,
+            ),
+            GraphEdge(
+                source_node=6,
+                target_node=4,
+                type=EdgeType.PREREQUISITE,
+            ),
+        ]
+    )
+    provider = AiProvider(db=None, user_token="test-token")
+    calls = []
+
+    async def call_ai(**kwargs):
+        calls.append(kwargs)
+        return plan if kwargs["user_prompt"].startswith("MODE: PLAN") else graph
+
+    provider.call_ai = call_ai
+    result = asyncio.run(
+        provider.generate_graph_pipeline(
+            user_prompt="MODE: SERVER_CREATE\nLearner request:\nTrain a model.",
+            agent_id=uuid4(),
+        )
+    )
+
+    assert len(calls) == 4
+    assert not any(
+        edge["source_node"] == 3 and edge["target_node"] == 4
+        for edge in result["edges"]
+    )
+    assert result["nodes"][4]["level"] == "foundation"
+
+
+def test_server_graph_pipeline_does_not_accept_multiple_remaining_issues():
+    plan = _pipeline_blueprint()
+    invalid_graph = _pipeline_graph(include_coverage=False)
+    provider = AiProvider(db=None, user_token="test-token")
+
+    async def call_ai(**kwargs):
+        return (
+            plan
+            if kwargs["user_prompt"].startswith("MODE: PLAN")
+            else invalid_graph
+        )
+
+    provider.call_ai = call_ai
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            provider.generate_graph_pipeline(
+                user_prompt="MODE: SERVER_CREATE\nLearner request:\nTrain a model.",
+                agent_id=uuid4(),
+            )
+        )
+
+    assert error.value.status_code == 422
+    assert "missing_coverage_map" in error.value.detail
+
+
 @pytest.mark.parametrize(
     ("failing_stage", "expected_calls"),
     [("planning", 1), ("creation", 2)],
