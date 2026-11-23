@@ -868,6 +868,8 @@ Represent each planned prerequisite with an essential PREREQUISITE path
 (weight >= 0.7) between leaves. Use SUBTOPIC only for hierarchy.
 """
         feedback = ""
+        best_graph: ManipulateGraphResponse | None = None
+        best_issues: list[str] | None = None
         for attempt in range(1, GRAPH_CREATION_ATTEMPTS + 1):
             graph = await call_generation_stage(
                 "creation",
@@ -884,6 +886,12 @@ Represent each planned prerequisite with an essential PREREQUISITE path
                 result["blueprint"] = plan.model_dump(mode="json")
                 result.setdefault("graph_description", learner_request)
                 return result
+            has_usable_node = any(node.title.strip() for node in graph.nodes)
+            if has_usable_node and (
+                best_issues is None or len(issues) <= len(best_issues)
+            ):
+                best_graph = graph.model_copy(deep=True)
+                best_issues = issues.copy()
             feedback = (
                 "\n\nThe previous graph failed the server-side learning-map "
                 "audit. Correct every issue while preserving valid content:\n"
@@ -891,36 +899,47 @@ Represent each planned prerequisite with an essential PREREQUISITE path
                 + "\nReturn the complete corrected graph JSON."
             )
 
-        if all(
-            issue.startswith("transitive_prerequisite:")
-            or issue.startswith("foundation_has_prerequisite:")
-            for issue in issues
-        ):
-            self._remove_transitive_prerequisite_edges(graph)
-            remaining_issues = self._validate_generated_graph(graph, plan)
-            if len(remaining_issues) == 1 and remaining_issues[0].startswith(
-                "foundation_has_prerequisite:"
-            ):
-                logger.warning(
-                    "Accepting graph after %s attempts with one non-blocking "
-                    "foundation-level warning: %s",
-                    GRAPH_CREATION_ATTEMPTS,
-                    remaining_issues[0],
-                )
-                result = graph.model_dump(mode="json")
-                result["blueprint"] = plan.model_dump(mode="json")
-                result.setdefault("graph_description", learner_request)
-                return result
-            issues = remaining_issues
+        if best_graph is None or best_issues is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    "No app-compatible graph was returned after "
+                    f"{GRAPH_CREATION_ATTEMPTS} quality attempts."
+                ),
+            )
 
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(
-                "The graph did not pass the server-side quality audit after "
-                f"{GRAPH_CREATION_ATTEMPTS} attempts: "
-                + " | ".join(issues)
-            ),
+        usable_nodes: list[Any] = []
+        seen_node_ids: set[int] = set()
+        for node in best_graph.nodes:
+            if not node.title.strip() or node.node_id in seen_node_ids:
+                continue
+            seen_node_ids.add(node.node_id)
+            usable_nodes.append(node)
+        best_graph.nodes = usable_nodes
+        usable_node_ids = {node.node_id for node in usable_nodes}
+        best_graph.edges = [
+            edge
+            for edge in best_graph.edges
+            if edge.source_node in usable_node_ids
+            and edge.target_node in usable_node_ids
+        ]
+        self._remove_transitive_prerequisite_edges(best_graph)
+        if not best_graph.graph_title.strip():
+            best_graph.graph_title = usable_nodes[0].title.strip()[:80]
+
+        remaining_issues = self._validate_generated_graph(best_graph, plan)
+        logger.warning(
+            "Using the best app-compatible graph after %s quality attempts "
+            "(%s issues before fallback, %s remaining).",
+            GRAPH_CREATION_ATTEMPTS,
+            len(best_issues),
+            len(remaining_issues),
         )
+        result = best_graph.model_dump(mode="json")
+        result["blueprint"] = plan.model_dump(mode="json")
+        result.setdefault("graph_description", learner_request)
+        result["quality_fallback"] = True
+        return result
 
     @staticmethod
     def _remove_transitive_prerequisite_edges(
